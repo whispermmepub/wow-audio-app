@@ -29,14 +29,9 @@ final class NarrationGenerationEngine {
     private NarrationGenerationEngine() { }
 
     static Result runOne(Context context, Listener listener) {
-        if (!ENGINE_LOCK.tryLock()) {
-            return Result.waiting(System.currentTimeMillis() + 30_000L);
-        }
-        try {
-            return runOneLocked(context, listener);
-        } finally {
-            ENGINE_LOCK.unlock();
-        }
+        if (!ENGINE_LOCK.tryLock()) return Result.waiting(System.currentTimeMillis() + 30_000L);
+        try { return runOneLocked(context, listener); }
+        finally { ENGINE_LOCK.unlock(); }
     }
 
     private static Result runOneLocked(Context context, Listener listener) {
@@ -61,11 +56,22 @@ final class NarrationGenerationEngine {
                 return Result.more();
             }
 
-            String key = new SecretStore(app).getApiKey();
-            if (empty(key)) {
+            NarrationSettings settings = new NarrationSettings(app);
+            boolean offline = settings.useOfflineEngine();
+            if (NarrationSettings.ENGINE_OFFLINE.equals(settings.engineMode()) && !offline) {
                 queue.markSetupRequired(job.bookId, job.revision, job.nextChapter, job.totalChapters);
-                status(listener, "Narration setup needed", "Open WoW Audio once and add your Gemini API key.", 0, 0, false);
+                status(listener, "Offline Burmese voice needed", "Install eSpeak NG once, then WoW Audio will prepare books without internet or an API key.", 0, 0, false);
                 return Result.auth();
+            }
+
+            String key = "";
+            if (!offline) {
+                key = new SecretStore(app).getApiKey();
+                if (empty(key)) {
+                    queue.markSetupRequired(job.bookId, job.revision, job.nextChapter, job.totalChapters);
+                    status(listener, "Narration setup needed", "Install the offline Burmese voice, or open WoW Audio once and add your Gemini API key.", 0, 0, false);
+                    return Result.auth();
+                }
             }
 
             NarrationUi.BookInput book = NarrationSourceLoader.load(app, job.bookId);
@@ -77,9 +83,9 @@ final class NarrationGenerationEngine {
                 return Result.more();
             }
 
-            NarrationSettings settings = new NarrationSettings(app);
             String voice = settings.voice();
             String style = settings.style();
+            String cacheVoice = settings.effectiveCacheVoice();
             AudioCache cache = new AudioCache(app);
 
             int chapterIndex = Math.max(0, job.nextChapter);
@@ -87,7 +93,7 @@ final class NarrationGenerationEngine {
                 if (listener != null && listener.isCancelled()) return Result.more();
                 if (!queue.isCurrentRevision(book.bookId, job.revision)) return Result.more();
                 NarrationUi.ChapterInput chapter = book.chapters.get(chapterIndex);
-                File target = cache.fileFor(book.bookId, chapterIndex, chapter.text, voice, style);
+                File target = cache.fileFor(book.bookId, chapterIndex, chapter.text, cacheVoice, style);
                 if (!cache.isReady(target) || !cache.hasFollowData(target)) break;
                 int complete = chapterIndex + 1;
                 queue.markChapterComplete(book.bookId, job.revision, complete, total);
@@ -97,15 +103,9 @@ final class NarrationGenerationEngine {
 
             if (chapterIndex >= total) {
                 queue.markDone(book.bookId, job.revision, total);
-                status(listener, title, "Audiobook ready. All " + total + " chapters are available offline. Press Play on Home.", total, total, false);
+                String engine = offline ? "offline Burmese voice" : "Gemini natural voice";
+                status(listener, title, "Audiobook ready with " + engine + ". All " + total + " chapters are available. Press Play on Home.", total, total, false);
                 return Result.more();
-            }
-
-            if (!GenerationEnvironment.hasNetwork(app)) {
-                long retryAt = now + 2L * 60_000L;
-                queue.markWaiting(book.bookId, job.revision, chapterIndex, total, retryAt, "Internet connection unavailable");
-                status(listener, title, "Internet is offline. Chapter " + (chapterIndex + 1) + " will continue automatically.", chapterIndex, total, false);
-                return Result.waiting(retryAt);
             }
 
             if (!GenerationEnvironment.hasStorageHeadroom(app)) {
@@ -119,11 +119,39 @@ final class NarrationGenerationEngine {
             final int current = chapterIndex;
             final int chapterNumber = chapterIndex + 1;
             NarrationUi.ChapterInput chapter = book.chapters.get(chapterIndex);
-            File target = cache.fileFor(book.bookId, chapterIndex, chapter.text, voice, style);
-            status(listener, title, "Preparing chapter " + chapterNumber + " of " + total + ": " + chapter.title, chapterIndex, total, true);
+            File target = cache.fileFor(book.bookId, chapterIndex, chapter.text, cacheVoice, style);
 
+            if (offline) {
+                status(listener, title, "Preparing chapter " + chapterNumber + " of " + total + " offline: " + chapter.title, chapterIndex, total, true);
+                try {
+                    OfflineBurmeseTtsClient.generateToWav(app, chapter.text, target,
+                            (completed, parts) -> status(listener, book.title,
+                                    "Offline chapter " + chapterNumber + " of " + total + " • part " + completed + " of " + parts,
+                                    chapterNumber - 1, total, true));
+                    if (!queue.isCurrentRevision(book.bookId, job.revision)) return Result.more();
+                    queue.markChapterComplete(book.bookId, job.revision, chapterNumber, total);
+                    status(listener, title, "Chapter " + chapterNumber + " of " + total + " ready offline", chapterNumber, total, true);
+                    return Result.more();
+                } catch (OfflineBurmeseTtsClient.OfflineTtsException e) {
+                    if (!queue.isCurrentRevision(book.bookId, job.revision)) return Result.more();
+                    long retryAt = System.currentTimeMillis() + 5L * 60_000L;
+                    queue.markWaiting(book.bookId, job.revision, current, total, retryAt, safeMessage(e));
+                    status(listener, title, "Offline Burmese voice needs attention. WoW Audio will retry automatically; open More options if it keeps waiting.", current, total, false);
+                    return Result.waiting(retryAt);
+                }
+            }
+
+            if (!GenerationEnvironment.hasNetwork(app)) {
+                long retryAt = now + 2L * 60_000L;
+                queue.markWaiting(book.bookId, job.revision, chapterIndex, total, retryAt, "Internet connection unavailable");
+                status(listener, title, "Internet is offline. Chapter " + chapterNumber + " will continue automatically.", chapterIndex, total, false);
+                return Result.waiting(retryAt);
+            }
+
+            status(listener, title, "Preparing chapter " + chapterNumber + " of " + total + " with Gemini: " + chapter.title, chapterIndex, total, true);
             try {
-                new GeminiTtsClient().generateToWav(key, chapter.text, voice, style, target,
+                final String geminiKey = key;
+                new GeminiTtsClient().generateToWav(geminiKey, chapter.text, voice, style, target,
                         new GeminiTtsClient.Progress() {
                             @Override public void onChunk(int completed, int chunks) {
                                 if (listener != null && listener.isCancelled()) throw new GenerationCancelledException();
