@@ -26,9 +26,9 @@ public class NarrationRecoveryWorker extends Worker {
 
         if (isStopped()) return Result.retry();
         if (result.state == NarrationGenerationEngine.State.MORE) {
-            NarrationWorkScheduler.schedule(getApplicationContext(), 1_000L);
+            NarrationWorkScheduler.continueAfterCurrent(getApplicationContext(), 1_000L);
         } else if (result.state == NarrationGenerationEngine.State.WAITING && result.retryAt > 0) {
-            NarrationWorkScheduler.scheduleAt(getApplicationContext(), result.retryAt);
+            NarrationWorkScheduler.continueAt(getApplicationContext(), result.retryAt);
         }
         return Result.success();
     }
