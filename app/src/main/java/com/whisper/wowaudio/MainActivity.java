@@ -53,6 +53,8 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (bookIndex != null && getIntent() != null && Intent.ACTION_MAIN.equals(getIntent().getAction())) {
+            LibraryGenerationReconciler.reconcile(this);
+            NarrationGenerationService.resumePending(this);
             loadLibrary();
             showLibrary();
         }
@@ -102,17 +104,18 @@ public class MainActivity extends Activity {
                 final String bookId = imported.getName();
                 runOnUiThread(() -> {
                     loadLibrary();
-                    boolean hasKey = new SecretStore(this).hasApiKey();
+                    NarrationSettings narration = new NarrationSettings(this);
+                    boolean available = narration.narrationAvailable();
                     String message = fromReader ? "Book received." : "Book imported.";
-                    message += hasKey
-                            ? " Narration is being prepared automatically in the background."
-                            : " Set up narration once to start automatic preparation.";
+                    message += available
+                            ? " Preparing automatically in the background with " + narration.engineLabel() + "."
+                            : " Set up a voice once. Then this and future books prepare automatically.";
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
                     showLibrary();
                     announceForAccessibility(message);
-                    if (!hasKey) {
+                    if (!available) {
                         NarrationUi.BookInput target = findBook(bookId);
-                        if (target != null) showBookDetail(target);
+                        openVoiceSetup(target);
                     }
                 });
             } catch (Exception e) {
@@ -190,26 +193,31 @@ public class MainActivity extends Activity {
         add.setOnClickListener(v -> launchPicker());
         root.addView(add, fullButtonParams());
 
+        NarrationSettings narration = new NarrationSettings(this);
+        TextView voiceStatus = text("Voice: " + narration.engineLabel(), 13,
+                narration.narrationAvailable() ? Color.rgb(61, 99, 66) : Color.rgb(102, 82, 58), true);
+        voiceStatus.setPadding(0, dp(14), 0, dp(5));
+        voiceStatus.setContentDescription("Narration voice status. " + narration.engineLabel());
+        root.addView(voiceStatus);
+
+        if (!narration.narrationAvailable()) {
+            TextView setupText = text("One-time setup: install the free offline Burmese voice, or use Gemini natural voice with your own API key.", 14, Color.rgb(80, 79, 74), false);
+            setupText.setLineSpacing(0, 1.25f);
+            root.addView(setupText);
+            Button setup = primaryButton("Set up voice once");
+            setup.setContentDescription("Set up narration voice once. Choose free offline Burmese voice or Gemini natural voice.");
+            LinearLayout.LayoutParams setupParams = fullButtonParams();
+            setupParams.topMargin = dp(10);
+            root.addView(setup, setupParams);
+            setup.setOnClickListener(v -> openVoiceSetup(books.isEmpty() ? null : books.get(0)));
+        }
+
         if (books.isEmpty()) {
             TextView empty = text("No books yet. Use Add Book to import your first EPUB.", 16, Color.rgb(58, 58, 55), false);
             empty.setPadding(0, dp(26), 0, 0);
             root.addView(empty);
             setContentView(scroll);
             return;
-        }
-
-        SecretStore secrets = new SecretStore(this);
-        if (!secrets.hasApiKey()) {
-            TextView setupHeading = heading("One-time narration setup", 20);
-            setupHeading.setPadding(0, dp(26), 0, dp(6));
-            root.addView(setupHeading);
-            TextView setupText = text("Add your Gemini API key once. After that, every imported book is prepared automatically.", 14, Color.rgb(80, 79, 74), false);
-            root.addView(setupText);
-            Button setup = primaryButton("Set up narration");
-            LinearLayout.LayoutParams setupParams = fullButtonParams();
-            setupParams.topMargin = dp(10);
-            root.addView(setup, setupParams);
-            setup.setOnClickListener(v -> showAdvancedNarration(books.get(0)));
         }
 
         ListeningProgressStore.Entry last = new ListeningProgressStore(this).last();
@@ -246,12 +254,13 @@ public class MainActivity extends Activity {
 
         int ready = offlineChapterCount(book);
         int total = book.chapters.size();
+        NarrationSettings narration = new NarrationSettings(this);
         String status;
         if (total == 0) status = "No readable chapters found.";
         else if (ready >= total) status = "Ready to play offline. All " + total + " chapters are prepared.";
         else if (ready > 0) status = ready + " of " + total + " chapters ready. Remaining chapters are preparing automatically.";
-        else if (new SecretStore(this).hasApiKey()) status = "Preparing automatically in the background. " + total + " chapters found.";
-        else status = "Narration setup required. " + total + " chapters found.";
+        else if (narration.narrationAvailable()) status = "Preparing automatically in the background with " + narration.engineLabel() + ". " + total + " chapters found.";
+        else status = "Voice setup required once. " + total + " chapters found.";
         TextView state = text(status, 14, ready > 0 ? Color.rgb(61, 99, 66) : Color.rgb(95, 93, 87), false);
         state.setLineSpacing(0, 1.2f);
         card.addView(state);
@@ -263,12 +272,12 @@ public class MainActivity extends Activity {
             p.topMargin = dp(12);
             card.addView(play, p);
             play.setOnClickListener(v -> playBook(book, 0, 0));
-        } else if (!new SecretStore(this).hasApiKey()) {
-            Button setup = primaryButton("Set up narration for " + book.title);
+        } else if (!narration.narrationAvailable()) {
+            Button setup = primaryButton("Set up voice for " + book.title);
             LinearLayout.LayoutParams p = fullButtonParams();
             p.topMargin = dp(12);
             card.addView(setup, p);
-            setup.setOnClickListener(v -> showAdvancedNarration(book));
+            setup.setOnClickListener(v -> openVoiceSetup(book));
         }
 
         Button details = secondaryButton("More options for " + book.title);
@@ -295,10 +304,15 @@ public class MainActivity extends Activity {
         root.addView(title);
         root.addView(text(book.author, 15, Color.rgb(94, 92, 87), false));
 
+        NarrationSettings narrationSettings = new NarrationSettings(this);
+        TextView engine = text("Voice: " + narrationSettings.engineLabel(), 13, Color.rgb(84, 82, 77), true);
+        engine.setPadding(0, dp(9), 0, dp(3));
+        root.addView(engine);
+
         int ready = offlineChapterCount(book);
         int total = book.chapters.size();
         TextView status = text(ready + " of " + total + " chapters ready for offline listening.", 14, Color.rgb(75, 74, 69), false);
-        status.setPadding(0, dp(10), 0, dp(12));
+        status.setPadding(0, dp(6), 0, dp(12));
         root.addView(status);
 
         if (ready > 0 && canPlayAt(book, 0)) {
@@ -307,7 +321,7 @@ public class MainActivity extends Activity {
             root.addView(play, fullButtonParams());
         }
 
-        if (new SecretStore(this).hasApiKey() && ready < total) {
+        if (narrationSettings.narrationAvailable() && ready < total) {
             Button prepare = primaryButton("Prepare all chapters now");
             LinearLayout.LayoutParams p = fullButtonParams();
             p.topMargin = dp(8);
@@ -318,11 +332,20 @@ public class MainActivity extends Activity {
             });
         }
 
-        Button narration = secondaryButton("Narration voice and advanced settings");
+        Button voiceSetup = secondaryButton("Offline or natural voice setup");
+        LinearLayout.LayoutParams vp = fullButtonParams();
+        vp.topMargin = dp(8);
+        root.addView(voiceSetup, vp);
+        voiceSetup.setOnClickListener(v -> openVoiceSetup(book));
+
+        Button narration = secondaryButton("Gemini voice and advanced settings");
         LinearLayout.LayoutParams n = fullButtonParams();
         n.topMargin = dp(8);
         root.addView(narration, n);
-        narration.setOnClickListener(v -> showAdvancedNarration(book));
+        narration.setOnClickListener(v -> {
+            new NarrationSettings(this).saveEngineMode(NarrationSettings.ENGINE_GEMINI);
+            showAdvancedNarration(book);
+        });
 
         TextView chapters = heading("Chapters", 20);
         chapters.setPadding(0, dp(28), 0, dp(6));
@@ -349,6 +372,15 @@ public class MainActivity extends Activity {
 
     private void showAdvancedNarration(NarrationUi.BookInput book) {
         new NarrationUi(this, book, () -> showBookDetail(book)).show();
+    }
+
+    private void openVoiceSetup(NarrationUi.BookInput book) {
+        NarrationSettings settings = new NarrationSettings(this);
+        if (NarrationSettings.ENGINE_GEMINI.equals(settings.engineMode()) && book != null && !settings.narrationAvailable()) {
+            showAdvancedNarration(book);
+            return;
+        }
+        startActivity(new Intent(this, OfflineVoiceSetupActivity.class));
     }
 
     private void playBook(NarrationUi.BookInput book, int startChapter, long startPosition) {
@@ -390,8 +422,9 @@ public class MainActivity extends Activity {
         try {
             NarrationSettings settings = new NarrationSettings(this);
             NarrationUi.ChapterInput chapter = book.chapters.get(chapterIndex);
-            File audio = new AudioCache(this).fileFor(book.bookId, chapterIndex, chapter.text, settings.voice(), settings.style());
-            return new AudioCache(this).isReady(audio);
+            AudioCache cache = new AudioCache(this);
+            File audio = cache.fileFor(book.bookId, chapterIndex, chapter.text, settings.voice(), settings.style());
+            return cache.isReady(audio);
         } catch (Exception ignored) { return false; }
     }
 
