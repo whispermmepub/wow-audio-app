@@ -541,6 +541,11 @@ public class MainActivity extends Activity {
         return view;
     }
 
+    private void announceForAccessibility(String message) {
+        View decor = getWindow() == null ? null : getWindow().getDecorView();
+        if (decor != null && message != null && !message.trim().isEmpty()) decor.announceForAccessibility(message);
+    }
+
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
