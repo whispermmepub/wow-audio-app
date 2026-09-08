@@ -90,13 +90,18 @@ public class PlaybackService extends Service {
         String action = intent.getAction();
         try {
             if (ACTION_PLAY_QUEUE.equals(action)) {
+                speed = clampSpeed(intent.getFloatExtra(EXTRA_SPEED, speed));
+                int sleepMinutes = Math.max(0, intent.getIntExtra(EXTRA_MINUTES, 0));
                 ArrayList<String> paths = intent.getStringArrayListExtra(EXTRA_PATHS);
                 ArrayList<String> titles = intent.getStringArrayListExtra(EXTRA_TITLES);
                 playQueue(paths, titles, intent.getStringExtra(EXTRA_AUTHOR));
+                setSleepTimer(sleepMinutes);
             } else if (ACTION_PLAY_FILE.equals(action)) {
+                speed = clampSpeed(intent.getFloatExtra(EXTRA_SPEED, speed));
                 ArrayList<String> paths = new ArrayList<>(); paths.add(intent.getStringExtra(EXTRA_PATH));
                 ArrayList<String> titles = new ArrayList<>(); titles.add(intent.getStringExtra(EXTRA_TITLE));
                 playQueue(paths, titles, intent.getStringExtra(EXTRA_AUTHOR));
+                setSleepTimer(Math.max(0, intent.getIntExtra(EXTRA_MINUTES, 0)));
             } else if (ACTION_TOGGLE.equals(action)) {
                 if (player.isPlaying()) pause(); else resume();
             } else if (ACTION_BACK.equals(action)) {
@@ -133,6 +138,10 @@ public class PlaybackService extends Service {
         String path = queuePaths.get(queueIndex);
         title = queueIndex < queueTitles.size() && !empty(queueTitles.get(queueIndex)) ? queueTitles.get(queueIndex) : "WoW Audio";
         player.reset();
+        player.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build());
         player.setDataSource(path);
         player.prepare();
         applySpeed();
@@ -185,7 +194,7 @@ public class PlaybackService extends Service {
     }
 
     private void setSpeed(float value) {
-        speed = Math.max(0.6f, Math.min(2f, value));
+        speed = clampSpeed(value);
         applySpeed();
         notifyNow();
     }
@@ -297,5 +306,6 @@ public class PlaybackService extends Service {
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+    private static float clampSpeed(float value) { return Math.max(0.6f, Math.min(2f, value)); }
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
 }
