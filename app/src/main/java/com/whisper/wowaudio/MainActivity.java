@@ -18,6 +18,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -33,6 +34,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -215,19 +217,26 @@ public class MainActivity extends Activity {
     private void showLibrary() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = column();
-        root.setPadding(dp(22), dp(24), dp(22), dp(36));
+        root.setPadding(dp(22), dp(24), dp(22), dp(40));
         scroll.addView(root);
+
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
         TextView brand = text("WoW Audio", 30, Color.rgb(24, 27, 29), true);
-        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(brand);
+        heading.addView(text("Listen to your books, your way", 12, Color.rgb(111, 108, 101), false));
+        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         Button add = button("＋ Add Book");
         add.setOnClickListener(v -> launchPicker());
         header.addView(add);
         root.addView(header);
-        TextView sub = text("Your private audiobook library", 13, Color.rgb(111, 108, 101), false);
-        sub.setPadding(0, dp(3), 0, dp(28));
-        root.addView(sub);
+
+        TextView privacy = text("Private EPUB library • BYOK narration • offline playback", 11, Color.rgb(126, 122, 113), false);
+        privacy.setPadding(0, dp(7), 0, dp(24));
+        root.addView(privacy);
+
         if (books.isEmpty()) {
             LinearLayout hero = card();
             hero.setPadding(dp(22), dp(28), dp(22), dp(28));
@@ -235,7 +244,7 @@ public class MainActivity extends Activity {
             TextView h = text("Turn EPUBs into listening", 22, Color.rgb(24, 27, 29), true);
             h.setPadding(0, dp(14), 0, dp(7));
             hero.addView(h);
-            TextView p = text("Import an EPUB from Files, Downloads or Telegram. Your books stay in WoW Audio's private library.", 14, Color.rgb(91, 91, 87), false);
+            TextView p = text("Import an EPUB from Files, Downloads or Telegram. Generate natural narration with your own Gemini key, then listen offline.", 14, Color.rgb(91, 91, 87), false);
             p.setLineSpacing(0, 1.25f);
             hero.addView(p);
             Button cta = button("Import EPUB");
@@ -244,35 +253,143 @@ public class MainActivity extends Activity {
             hero.addView(cta, lp);
             cta.setOnClickListener(v -> launchPicker());
             root.addView(hero);
-        } else {
-            root.addView(text("Imported Books", 18, Color.rgb(24, 27, 29), true));
-            for (Book b : books) root.addView(bookCard(b));
+            setContentView(scroll);
+            return;
         }
+
+        ListeningProgressStore progressStore = new ListeningProgressStore(this);
+        ListeningProgressStore.Entry last = progressStore.last();
+        Book continueBook = last == null ? null : findBookById(last.bookId);
+        if (continueBook != null && last.audioPath != null && new File(last.audioPath).isFile()) {
+            root.addView(sectionTitle("Continue Listening"));
+            root.addView(continueCard(continueBook, last));
+        }
+
+        List<Book> offline = offlineBooks();
+        if (!offline.isEmpty()) {
+            root.addView(sectionTitle("Downloaded / Offline"));
+            for (Book b : offline) root.addView(bookCard(b, true));
+        }
+
+        List<Book> recent = recentBooks();
+        if (!recent.isEmpty()) {
+            root.addView(sectionTitle("Recent Books"));
+            for (int i = 0; i < Math.min(3, recent.size()); i++) root.addView(bookCard(recent.get(i), false));
+        }
+
+        root.addView(sectionTitle("All Imported Books"));
+        for (Book b : books) root.addView(bookCard(b, false));
         setContentView(scroll);
     }
 
-    private View bookCard(Book b) {
+    private View sectionTitle(String title) {
+        TextView section = text(title, 18, Color.rgb(24, 27, 29), true);
+        section.setPadding(0, dp(25), 0, dp(1));
+        return section;
+    }
+
+    private View continueCard(Book b, ListeningProgressStore.Entry entry) {
         LinearLayout card = card();
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams outer = new LinearLayout.LayoutParams(-1, -2);
-        outer.topMargin = dp(12);
+        outer.topMargin = dp(10);
+        card.setLayoutParams(outer);
+
+        ImageView cover = new ImageView(this);
+        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        Bitmap bm = bitmap(b.cover);
+        if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
+        card.addView(cover, new LinearLayout.LayoutParams(dp(90), dp(130)));
+
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.VERTICAL);
+        meta.setPadding(dp(16), 0, 0, 0);
+        meta.addView(text(b.title, 18, Color.rgb(27, 29, 30), true));
+        TextView chapter = text("Chapter " + (entry.chapterIndex + 1) + " • " + entry.chapterTitle, 12, Color.rgb(105, 104, 99), false);
+        chapter.setPadding(0, dp(5), 0, dp(8));
+        meta.addView(chapter);
+
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(ListeningProgressStore.percent(entry));
+        meta.addView(bar, new LinearLayout.LayoutParams(-1, dp(5)));
+        TextView percent = text(ListeningProgressStore.percent(entry) + "% of current chapter", 11, Color.rgb(126, 122, 113), false);
+        percent.setPadding(0, dp(5), 0, dp(8));
+        meta.addView(percent);
+        Button resume = button("▶  Resume Listening");
+        resume.setOnClickListener(v -> showNarration(b));
+        meta.addView(resume, new LinearLayout.LayoutParams(-1, -2));
+        card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
+        card.setOnClickListener(v -> showNarration(b));
+        return card;
+    }
+
+    private View bookCard(Book b, boolean offlineSection) {
+        LinearLayout card = card();
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams outer = new LinearLayout.LayoutParams(-1, -2);
+        outer.topMargin = dp(10);
         card.setLayoutParams(outer);
         ImageView cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         Bitmap bm = bitmap(b.cover);
         if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
         card.addView(cover, new LinearLayout.LayoutParams(dp(72), dp(104)));
-        LinearLayout meta = column();
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.VERTICAL);
         meta.setPadding(dp(16), 0, 0, 0);
         meta.addView(text(b.title, 17, Color.rgb(27, 29, 30), true));
         TextView a = text(b.author, 13, Color.rgb(105, 104, 99), false);
-        a.setPadding(0, dp(5), 0, dp(8));
+        a.setPadding(0, dp(5), 0, dp(7));
         meta.addView(a);
-        meta.addView(text(b.chapters.size() + " chapters", 12, Color.rgb(126, 122, 113), false));
+        int ready = offlineChapterCount(b);
+        String detail = b.chapters.size() + " chapters";
+        if (ready > 0) detail += " • " + ready + " offline";
+        TextView state = text(detail, 12, ready > 0 ? Color.rgb(69, 106, 74) : Color.rgb(126, 122, 113), false);
+        meta.addView(state);
+        if (offlineSection && ready == b.chapters.size() && ready > 0) {
+            TextView badge = text("✓ Whole book ready offline", 11, Color.rgb(69, 106, 74), true);
+            badge.setPadding(0, dp(5), 0, 0);
+            meta.addView(badge);
+        }
         card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
         card.setOnClickListener(v -> showBookDetail(b));
         return card;
+    }
+
+    private List<Book> offlineBooks() {
+        List<Book> result = new ArrayList<>();
+        for (Book b : books) if (offlineChapterCount(b) > 0) result.add(b);
+        result.sort((a, b) -> Long.compare(b.file.lastModified(), a.file.lastModified()));
+        return result;
+    }
+
+    private List<Book> recentBooks() {
+        List<Book> result = new ArrayList<>(books);
+        result.sort(Comparator.comparingLong((Book b) -> b.file.lastModified()).reversed());
+        return result;
+    }
+
+    private int offlineChapterCount(Book b) {
+        try {
+            AudioCache cache = new AudioCache(this);
+            NarrationSettings settings = new NarrationSettings(this);
+            int ready = 0;
+            for (int i = 0; i < b.chapters.size(); i++) {
+                Chapter c = b.chapters.get(i);
+                File audio = cache.fileFor(b.fileName, i, c.text, settings.voice(), settings.style());
+                if (cache.isReady(audio)) ready++;
+            }
+            return ready;
+        } catch (Exception ignored) { return 0; }
+    }
+
+    private Book findBookById(String bookId) {
+        if (bookId == null) return null;
+        for (Book b : books) if (bookId.equals(b.fileName)) return b;
+        return null;
     }
 
     private void showBookDetail(Book b) {
@@ -298,9 +415,15 @@ public class MainActivity extends Activity {
         TextView author = text(b.author, 14, Color.rgb(103, 101, 95), false);
         author.setGravity(Gravity.CENTER);
         root.addView(author);
-        Button narrate = button("Narration & offline audio");
+        int offline = offlineChapterCount(b);
+        TextView state = text(offline > 0 ? offline + "/" + b.chapters.size() + " chapters ready offline" : "Narration not downloaded yet", 12,
+                offline > 0 ? Color.rgb(69, 106, 74) : Color.rgb(112, 109, 103), false);
+        state.setGravity(Gravity.CENTER);
+        state.setPadding(0, dp(9), 0, 0);
+        root.addView(state);
+        Button narrate = button(offline > 0 ? "Listen / Narration settings" : "Set up narration");
         LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
-        np.topMargin = dp(22);
+        np.topMargin = dp(20);
         root.addView(narrate, np);
         narrate.setOnClickListener(v -> showNarration(b));
         TextView ch = text("Chapters", 18, Color.rgb(24, 27, 29), true);
@@ -327,7 +450,7 @@ public class MainActivity extends Activity {
     private void showNarration(Book b) {
         List<NarrationUi.ChapterInput> chapters = new ArrayList<>();
         for (Chapter c : b.chapters) chapters.add(new NarrationUi.ChapterInput(c.title, c.text));
-        NarrationUi.BookInput input = new NarrationUi.BookInput(b.fileName, b.title, b.author, chapters);
+        NarrationUi.BookInput input = new NarrationUi.BookInput(b.fileName, b.title, b.author, b.cover, chapters);
         new NarrationUi(this, input, () -> showBookDetail(b)).show();
     }
 

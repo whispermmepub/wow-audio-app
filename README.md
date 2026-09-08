@@ -2,24 +2,31 @@
 
 Premium Myanmar audiobook companion for WoW Reader, with standalone EPUB import and BYOK Gemini TTS.
 
-## Current v0.2.0 test build
+## WoW Audio v1.0.0
 
 - Android application id: `com.whisper.wowaudio`
 - minSdk 23, target/compile SDK 36
-- version `0.2.0` / versionCode `2`
-- Premium private EPUB library and Book Detail
+- version `1.0.0` / versionCode `3`
+- Premium listening-first private EPUB library
+- Continue Listening, Downloaded / Offline, Recent Books and All Imported Books sections
 - Standalone import from Android Files / Downloads / Telegram open/share flows
+- Stable WoW Reader → WoW Audio handoff preserved
 - EPUB metadata, cover, spine, readable text, EPUB3 NAV and EPUB2 NCX chapter titles
 - Persistent local book metadata so WoW Reader supplied Burmese title/author survives reloads
 - BYOK Gemini TTS using `gemini-3.1-flash-tts-preview`
-- Gemini API key encrypted with Android Keystore and stored only on-device
-- Voice and narration direction controls
-- Per-chapter and whole-book offline generation with deterministic audio caching
-- Retry/backoff for transient Gemini 408/429/5xx failures
+- Gemini API key encrypted with Android Keystore and excluded from backup / device transfer
+- API-key test + voice preview flow
+- 30 Gemini TTS voices and narration style presets/custom direction
+- Myanmar speech preparation for Unicode cleanup, spacing, punctuation, Myanmar/ASCII digits, dates, times and percentages
+- Per-chapter and whole-book sequential pre-generation with deterministic private offline audio caching
+- Retry/backoff for transient Gemini 408/429/5xx failures and clearer key/quota/network errors
 - Continuous cached chapter playback
-- Android MediaSession + foreground media playback + lock-screen/notification controls
-- ±15 second seek, next/previous chapter, playback speed, sleep timer
-- Offline cache status and cache clearing
+- Device-local listening progress and resume position
+- Android foreground media playback + MediaSession + lock-screen/notification controls
+- Play/pause, ±15 second seek, previous/next chapter, playback speed and sleep timer
+- Follow Text / Now Playing screen with cover, progress and sentence-level highlighting
+- Follow Text timing uses measured generated-audio duration plus proportional sentence timing; it is not model-provided word timestamps
+- Offline cache state and clearing controls
 
 CI builds debug + unsigned release, runs release lint, verifies the Reader handoff contract, and verifies APK identity.
 
@@ -39,13 +46,14 @@ The Reader → Audio receiver contract was previously verified on a real device 
 
 Never commit Gemini/API keys or signing secrets. User Gemini API keys are encrypted with Android Keystore and remain device-local. Generated audio stays under app-private storage unless a future explicit export feature is added.
 
-## Validation note
+## Validation boundary
 
-Repository CI verifies compilation, release lint, APK identity, and the stable Reader handoff contract. A real Gemini narration request still requires the user's own API key and device/network test; do not claim live API narration is verified until that test is performed.
+Repository CI verifies compilation, release lint, APK identity, and the stable Reader handoff contract. A live Gemini narration request still requires the user's own API key entered only in the app and a real-device/network test. CI success alone does not prove that a particular user key/quota/network combination works.
 
-## Still future / not part of v0.2.0
+## Intentionally future
 
-- Accurate sentence-follow highlighting with real audio timing
-- Custom/My Voice
+- Custom/My Voice or voice cloning
 - Production-grade PDF narration
 - Native/offline Myanmar TTS model
+- Model-provided exact word/sentence timestamps if Gemini TTS exposes them in a future API
+- Process-kill-resumable background generation queue (completed chapter cache already survives interruption)
