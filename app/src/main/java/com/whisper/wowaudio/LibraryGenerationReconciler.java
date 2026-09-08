@@ -23,11 +23,11 @@ final class LibraryGenerationReconciler {
             if (!file.isFile() || !file.getName().toLowerCase(Locale.US).endsWith(".epub")) continue;
             if (store.get(file.getName()) == null) {
                 // Legacy v1.1 and interrupted pre-v1.2 books have no durable job.
-                // Start from chapter 0; the service skips any chapters already cached.
+                // Start at chapter 0; the engine skips chapters already cached.
                 store.enqueue(file.getName(), false);
                 added = true;
             }
         }
-        if (added) NarrationGenerationService.resumePending(app);
+        if (added) NarrationWorkScheduler.schedule(app, 0);
     }
 }
