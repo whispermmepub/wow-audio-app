@@ -16,6 +16,8 @@ final class NarrationSettings {
 
     String voice() { return prefs.getString("voice", DEFAULT_VOICE); }
     String style() { return prefs.getString("style", DEFAULT_STYLE); }
+    float speed() { return clampSpeed(prefs.getFloat("speed", 1f)); }
+    int sleepMinutes() { return Math.max(0, prefs.getInt("sleep_minutes", 0)); }
 
     void save(String voice, String style) {
         prefs.edit()
@@ -24,5 +26,13 @@ final class NarrationSettings {
                 .apply();
     }
 
+    void savePlayback(float speed, int sleepMinutes) {
+        prefs.edit()
+                .putFloat("speed", clampSpeed(speed))
+                .putInt("sleep_minutes", Math.max(0, sleepMinutes))
+                .apply();
+    }
+
+    private static float clampSpeed(float value) { return Math.max(0.6f, Math.min(2f, value)); }
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
 }
