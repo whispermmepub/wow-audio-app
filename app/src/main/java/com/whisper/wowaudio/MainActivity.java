@@ -256,9 +256,9 @@ public class MainActivity extends Activity {
         state.setLineSpacing(0, 1.2f);
         card.addView(state);
 
-        if (ready > 0 && canPlayAt(book, 0)) {
+        if (total > 0 && ready >= total && canPlayAt(book, 0)) {
             Button play = primaryButton("Play " + book.title);
-            play.setContentDescription("Play " + book.title + " from the beginning.");
+            play.setContentDescription("Play " + book.title + " from the beginning. All chapters are ready offline.");
             LinearLayout.LayoutParams p = fullButtonParams();
             p.topMargin = dp(12);
             card.addView(play, p);
