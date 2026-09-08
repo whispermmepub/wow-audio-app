@@ -24,7 +24,6 @@ final class FollowAlongUi {
     private final Activity activity;
     private final NarrationUi.BookInput book;
     private final Runnable onBack;
-    private final AudioCache cache;
     private final ListeningProgressStore progress;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView chapterTitle;
@@ -49,7 +48,6 @@ final class FollowAlongUi {
         this.activity = activity;
         this.book = book;
         this.onBack = onBack;
-        this.cache = new AudioCache(activity);
         this.progress = new ListeningProgressStore(activity);
     }
 
@@ -67,7 +65,8 @@ final class FollowAlongUi {
 
         ImageView cover = new ImageView(activity);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap bm = bitmap(book.cover);
+        byte[] coverBytes = book.cover != null ? book.cover : BookCoverLoader.load(activity, book.bookId);
+        Bitmap bm = bitmap(coverBytes);
         if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(150), dp(218));
         coverParams.gravity = Gravity.CENTER_HORIZONTAL;
@@ -139,7 +138,7 @@ final class FollowAlongUi {
 
     private void refresh() {
         ListeningProgressStore.Entry entry = progress.load(book.bookId);
-        if (entry == null) {
+        if (entry == null || book.chapters.isEmpty()) {
             playPause.setText("▶ Play");
             return;
         }
