@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
+        android:name=".WoWAudioApplication"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -22,7 +26,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Stable WoW Reader -> WoW Audio contract. -->
             <intent-filter>
                 <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -30,13 +33,11 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
-            <!-- Fallback for Reader builds/providers that omit MIME type. -->
             <intent-filter>
                 <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            <!-- Standalone Open with from Files / Downloads / Telegram. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -84,5 +85,20 @@
             android:name=".NarrationGenerationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".GenerationResumeReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
+            android:name=".GenerationBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

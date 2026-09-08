@@ -1,178 +1,176 @@
 package com.whisper.wowaudio;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 
 import java.io.File;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class NarrationGenerationService extends Service {
-    static final String ACTION_GENERATE_BOOK = "com.whisper.wowaudio.GENERATE_BOOK";
-    static final String EXTRA_BOOK_ID = "book_id";
-    private static final String CHANNEL = "wow_audio_generation";
-    private static final int NOTIFICATION_ID = 4201;
+    static final String ACTION_DRAIN = "com.whisper.wowaudio.GENERATE_PENDING";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final Set<String> queued = new HashSet<>();
-    private int pendingJobs;
+    private GenerationQueueStore queue;
+    private boolean draining;
+    private volatile boolean stopping;
+    private PowerManager.WakeLock wakeLock;
 
     static void enqueue(Context context, String bookId) {
-        if (context == null || bookId == null || bookId.trim().isEmpty()) return;
-        Intent intent = new Intent(context, NarrationGenerationService.class)
-                .setAction(ACTION_GENERATE_BOOK)
-                .putExtra(EXTRA_BOOK_ID, bookId);
-        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
-        else context.startService(intent);
+        if (context == null || empty(bookId)) return;
+        new GenerationQueueStore(context).enqueue(bookId, true);
+        startDrain(context);
+    }
+
+    static void enqueueAllLibrary(Context context) {
+        if (context == null) return;
+        File library = new File(context.getFilesDir(), "library");
+        File[] files = library.listFiles();
+        GenerationQueueStore store = new GenerationQueueStore(context);
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile() && file.getName().toLowerCase(Locale.US).endsWith(".epub")) {
+                    store.enqueue(file.getName(), true);
+                }
+            }
+        }
+        startDrain(context);
+    }
+
+    static void resumePending(Context context) {
+        if (context == null) return;
+        GenerationQueueStore store = new GenerationQueueStore(context);
+        long now = System.currentTimeMillis();
+        if (!store.due(now).isEmpty()) startDrain(context);
+        else {
+            long retryAt = store.earliestRetryAt();
+            if (retryAt > now) NarrationWorkScheduler.scheduleAt(context, retryAt);
+        }
+    }
+
+    private static void startDrain(Context context) {
+        // A visible/user-initiated foreground drain is the fastest path. Cancel any
+        // queued recovery work first; if Android rejects the FGS start, immediately
+        // restore WorkManager as the durable fallback.
+        NarrationWorkScheduler.cancel(context);
+        Intent intent = new Intent(context, NarrationGenerationService.class).setAction(ACTION_DRAIN);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+            else context.startService(intent);
+        } catch (Exception ignored) {
+            NarrationWorkScheduler.schedule(context, 0);
+        }
     }
 
     @Override public void onCreate() {
         super.onCreate();
-        createChannel();
+        queue = new GenerationQueueStore(this);
+        NarrationNotificationHelper.ensureChannel(this);
+        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WoWAudio:Generation");
+        wakeLock.setReferenceCounted(false);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        String bookId = intent == null ? null : intent.getStringExtra(EXTRA_BOOK_ID);
-        if (!ACTION_GENERATE_BOOK.equals(intent == null ? null : intent.getAction()) || bookId == null || bookId.trim().isEmpty()) {
-            stopSelf(startId);
-            return START_NOT_STICKY;
-        }
-        startForeground(NOTIFICATION_ID, notification("Preparing audiobook", "Loading book…", 0, 0, true));
-        synchronized (this) {
-            if (queued.contains(bookId)) return START_NOT_STICKY;
-            queued.add(bookId);
-            pendingJobs++;
-        }
-        executor.execute(() -> generate(bookId));
-        return START_REDELIVER_INTENT;
+        stopping = false;
+        startForeground(
+                NarrationNotificationHelper.NOTIFICATION_ID,
+                NarrationNotificationHelper.build(this, "WoW Audio", "Checking audiobook preparation queue…", 0, 0, true));
+        kickDrain();
+        return START_STICKY;
     }
 
-    private void generate(String bookId) {
-        String bookTitle = "Book";
-        try {
-            SecretStore secrets = new SecretStore(this);
-            String key = secrets.getApiKey();
-            if (key == null || key.trim().isEmpty()) {
-                notifyNow(notification("Narration setup needed", "Open WoW Audio and add your Gemini API key.", 0, 0, false));
-                return;
-            }
-
-            NarrationUi.BookInput book = NarrationSourceLoader.load(this, bookId);
-            bookTitle = book.title;
-            NarrationSettings settings = new NarrationSettings(this);
-            AudioCache cache = new AudioCache(this);
-            GeminiTtsClient client = new GeminiTtsClient();
-            int total = book.chapters.size();
-            if (total == 0) {
-                notifyNow(notification(bookTitle, "No readable chapters found.", 0, 0, false));
-                return;
-            }
-
-            for (int i = 0; i < total; i++) {
-                NarrationUi.ChapterInput chapter = book.chapters.get(i);
-                File target = cache.fileFor(book.bookId, i, chapter.text, settings.voice(), settings.style());
-                int chapterNumber = i + 1;
-                if (cache.isReady(target) && cache.hasFollowData(target)) {
-                    notifyNow(notification(bookTitle,
-                            "Chapter " + chapterNumber + " of " + total + " already ready", chapterNumber, total, true));
-                    continue;
+    private synchronized void kickDrain() {
+        if (draining || stopping) return;
+        draining = true;
+        executor.execute(() -> {
+            try { drainQueue(); }
+            finally {
+                releaseWakeLock();
+                boolean runAgain;
+                synchronized (NarrationGenerationService.this) {
+                    draining = false;
+                    runAgain = !stopping && queue != null && !queue.due(System.currentTimeMillis()).isEmpty();
                 }
-                notifyNow(notification(bookTitle,
-                        "Preparing chapter " + chapterNumber + " of " + total + ": " + chapter.title,
-                        i, total, true));
-                final int absoluteChapter = chapterNumber;
-                client.generateToWav(key, chapter.text, settings.voice(), settings.style(), target,
-                        new GeminiTtsClient.Progress() {
-                            @Override public void onChunk(int completed, int chunks) {
-                                notifyNow(notification(book.title,
-                                        "Chapter " + absoluteChapter + " of " + total + " • part " + completed + " of " + chunks,
-                                        absoluteChapter - 1, total, true));
-                            }
+                if (runAgain) kickDrain();
+                else finishServiceIfIdle();
+            }
+        });
+    }
 
-                            @Override public void onWait(int seconds, String reason) {
-                                notifyNow(notification(book.title,
-                                        reason + ". Continuing automatically in " + seconds + " seconds.",
-                                        absoluteChapter - 1, total, true));
-                            }
-                        });
-                notifyNow(notification(bookTitle,
-                        "Chapter " + chapterNumber + " of " + total + " ready", chapterNumber, total, true));
+    private void drainQueue() {
+        while (!stopping && !Thread.currentThread().isInterrupted()) {
+            renewWakeLock();
+            NarrationGenerationEngine.Result result;
+            try {
+                result = NarrationGenerationEngine.runOne(this, new NarrationGenerationEngine.Listener() {
+                    @Override public void onStatus(String title, String text, int progress, int max, boolean ongoing) {
+                        NarrationNotificationHelper.notify(NarrationGenerationService.this, title, text, progress, max, ongoing);
+                    }
+
+                    @Override public boolean isCancelled() {
+                        return stopping || Thread.currentThread().isInterrupted();
+                    }
+                });
+            } finally {
+                releaseWakeLock();
             }
 
-            notifyNow(notification(bookTitle,
-                    "Audiobook ready. Open WoW Audio and press Play.", total, total, false));
-        } catch (Exception e) {
-            String message = e.getMessage() == null || e.getMessage().trim().isEmpty()
-                    ? "Narration stopped. Open WoW Audio to try again."
-                    : "Narration paused: " + shortMessage(e.getMessage());
-            notifyNow(notification(bookTitle, message, 0, 0, false));
-        } finally {
-            finishJob(bookId);
+            if (result.state == NarrationGenerationEngine.State.MORE) continue;
+            if (result.state == NarrationGenerationEngine.State.WAITING && result.retryAt > 0) {
+                NarrationWorkScheduler.scheduleAt(this, result.retryAt);
+            }
+            return;
         }
     }
 
-    private synchronized void finishJob(String bookId) {
-        queued.remove(bookId);
-        pendingJobs = Math.max(0, pendingJobs - 1);
-        if (pendingJobs == 0) {
-            stopForeground(false);
-            stopSelf();
-        }
+    private void renewWakeLock() {
+        if (wakeLock == null) return;
+        try {
+            if (wakeLock.isHeld()) wakeLock.release();
+            wakeLock.acquire(30L * 60_000L);
+        } catch (Exception ignored) { }
     }
 
-    private Notification notification(String title, String text, int progress, int max, boolean ongoing) {
-        Intent open = new Intent(this, MainActivity.class)
-                .setAction(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= 23) pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent content = PendingIntent.getActivity(this, 0, open, pendingFlags);
-        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(this, CHANNEL)
-                : new Notification.Builder(this);
-        builder.setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setStyle(new Notification.BigTextStyle().bigText(text))
-                .setContentIntent(content)
-                .setOnlyAlertOnce(true)
-                .setOngoing(ongoing)
-                .setVisibility(Notification.VISIBILITY_PUBLIC);
-        if (max > 0) builder.setProgress(max, Math.max(0, Math.min(max, progress)), false);
-        else if (ongoing) builder.setProgress(0, 0, true);
-        return builder.build();
+    private void releaseWakeLock() {
+        if (wakeLock == null) return;
+        try { if (wakeLock.isHeld()) wakeLock.release(); }
+        catch (Exception ignored) { }
     }
 
-    private void notifyNow(Notification notification) {
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NOTIFICATION_ID, notification);
+    private synchronized void finishServiceIfIdle() {
+        if (draining) return;
+        stopForeground(false);
+        stopSelf();
     }
 
-    private void createChannel() {
-        if (Build.VERSION.SDK_INT < 26) return;
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "Audiobook preparation", NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Progress while WoW Audio prepares imported books for offline listening");
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(channel);
-    }
-
-    private static String shortMessage(String value) {
-        String oneLine = value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim();
-        return oneLine.length() > 150 ? oneLine.substring(0, 150) + "…" : oneLine;
+    @Override public void onTimeout(int startId, int fgsType) {
+        // Android 15+ limits dataSync foreground-service time. Queue progress already
+        // lives on disk, so hand recovery to WorkManager instead of risking a crash.
+        stopping = true;
+        NarrationWorkScheduler.schedule(this, 60_000L);
+        NarrationNotificationHelper.notify(this, "WoW Audio",
+                "Android paused a very long preparation session. Progress is saved and will resume automatically.",
+                0, 0, false);
+        releaseWakeLock();
+        executor.shutdownNow();
+        stopForeground(true);
+        stopSelf(startId);
     }
 
     @Override public void onDestroy() {
+        stopping = true;
+        releaseWakeLock();
         executor.shutdownNow();
         super.onDestroy();
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+
+    private static boolean empty(String value) { return value == null || value.trim().isEmpty(); }
 }

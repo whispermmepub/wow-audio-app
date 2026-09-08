@@ -21,10 +21,11 @@ import java.util.regex.Pattern;
 final class GeminiTtsClient {
     static final String MODEL = "gemini-3.1-flash-tts-preview";
     private static final String ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
-    // Keep requests comfortably below the model's 8,192-token input limit while
-    // substantially reducing request count compared with the old 1,400-char chunks.
     private static final int MAX_CHARS_PER_REQUEST = 3200;
-    private static final int MAX_ATTEMPTS = 10;
+    private static final int MAX_ATTEMPTS = 5;
+    private static final long MIN_REQUEST_GAP_MS = 6000L;
+    private static final Object PACER = new Object();
+    private static long nextRequestAtMs;
 
     interface Progress {
         void onChunk(int completed, int total);
@@ -32,38 +33,38 @@ final class GeminiTtsClient {
     }
 
     GenerationResult generateToWav(String apiKey, String text, String voice, String style, File output, Progress progress) throws Exception {
-        if (empty(apiKey)) throw new Exception("Gemini API key is missing");
-        if (empty(text)) throw new Exception("Chapter has no readable text");
+        if (empty(apiKey)) throw new TtsException(0, false, true, false, 0, "Gemini API key is missing", null);
+        if (empty(text)) throw new TtsException(0, false, false, false, 0, "Chapter has no readable text", null);
         String speechText = MyanmarTextNormalizer.normalizeForSpeech(text);
-        if (empty(speechText)) throw new Exception("Chapter has no speakable text");
+        if (empty(speechText)) throw new TtsException(0, false, false, false, 0, "Chapter has no speakable text", null);
+
         List<String> chunks = chunk(speechText);
-        ByteArrayOutputStream pcm = new ByteArrayOutputStream();
         List<AudioTimingStore.Segment> timings = new ArrayList<>();
-        int outputSampleRate = 24000;
         long cursorMs = 0;
-        for (int i = 0; i < chunks.size(); i++) {
-            AudioBlock block = request(apiKey.trim(), chunks.get(i), voice, style, progress);
-            int sampleRate = block.sampleRate > 0 ? block.sampleRate : 24000;
-            if (i == 0) outputSampleRate = sampleRate;
-            byte[] blockPcm = asPcm(block.data);
-            pcm.write(blockPcm);
-            long durationMs = pcmDurationMs(blockPcm, sampleRate);
-            appendSentenceTimings(timings, chunks.get(i), cursorMs, durationMs);
-            cursorMs += durationMs;
-            if (progress != null) progress.onChunk(i + 1, chunks.size());
-            // A small pacing gap between successful requests helps avoid burst RPM limits.
-            if (i + 1 < chunks.size()) Thread.sleep(1500L);
+        try (WavUtil.StreamWriter wav = WavUtil.streamingPcm16Mono(output)) {
+            for (int i = 0; i < chunks.size(); i++) {
+                AudioBlock block = request(apiKey.trim(), chunks.get(i), voice, style, progress);
+                int sampleRate = block.sampleRate > 0 ? block.sampleRate : 24000;
+                byte[] blockPcm = asPcm(block.data);
+                if (blockPcm.length == 0) throw new TtsException(0, true, false, false, 30, "Gemini returned empty audio", null);
+                wav.write(blockPcm, sampleRate);
+                long durationMs = pcmDurationMs(blockPcm, sampleRate);
+                appendSentenceTimings(timings, chunks.get(i), cursorMs, durationMs);
+                cursorMs += durationMs;
+                if (progress != null) progress.onChunk(i + 1, chunks.size());
+            }
+            wav.commit();
         }
-        WavUtil.writePcm16Mono(output, pcm.toByteArray(), outputSampleRate);
         AudioTimingStore.write(output, timings);
         return new GenerationResult(speechText, timings);
     }
 
     private AudioBlock request(String apiKey, String text, String voice, String style, Progress progress) throws Exception {
-        Exception last = null;
+        TtsException last = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             HttpURLConnection c = null;
             try {
+                awaitRequestSlot();
                 c = (HttpURLConnection) new URL(ENDPOINT).openConnection();
                 c.setRequestMethod("POST");
                 c.setConnectTimeout(30000);
@@ -87,57 +88,46 @@ final class GeminiTtsClient {
                 String retryAfter = c.getHeaderField("Retry-After");
                 String response = readText(code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream());
                 if (code < 200 || code >= 300) {
-                    ApiException api = new ApiException(code, apiError(code, response));
-                    if (retryable(code) && attempt < MAX_ATTEMPTS) {
+                    int wait = retryDelaySeconds(code, attempt, retryAfter, response);
+                    boolean retryable = retryable(code);
+                    String errorMessage = apiError(code, response);
+                    boolean authFailure = code == 401 || code == 403 || (code == 400 && looksLikeApiKeyError(response, errorMessage));
+                    TtsException api = new TtsException(
+                            code,
+                            retryable,
+                            authFailure,
+                            code == 429,
+                            wait,
+                            errorMessage,
+                            null);
+                    if (retryable && attempt < MAX_ATTEMPTS) {
                         last = api;
-                        int wait = retryDelaySeconds(code, attempt, retryAfter, response);
+                        pushPacer(wait);
                         if (progress != null) progress.onWait(wait, code == 429 ? "Gemini rate limit" : "Temporary Gemini error");
-                        Thread.sleep(wait * 1000L);
+                        sleepSeconds(wait);
                         continue;
                     }
                     throw api;
                 }
+                markRequestSuccess();
                 return parseAudio(response);
-            } catch (ApiException e) {
+            } catch (TtsException e) {
                 throw e;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw e;
             } catch (Exception e) {
-                last = e;
-                if (attempt >= MAX_ATTEMPTS) throw e;
-                int wait = Math.min(30, 3 * (1 << Math.min(4, attempt - 1)));
-                if (progress != null) progress.onWait(wait, "Network retry");
-                Thread.sleep(wait * 1000L);
+                int wait = Math.min(45, 4 * (1 << Math.min(4, attempt - 1)));
+                last = new TtsException(0, true, false, false, wait,
+                        e.getMessage() == null ? "Network or Gemini response error" : e.getMessage(), e);
+                if (attempt >= MAX_ATTEMPTS) throw last;
+                if (progress != null) progress.onWait(wait, "Network or response retry");
+                sleepSeconds(wait);
             } finally {
                 if (c != null) c.disconnect();
             }
         }
-        throw last == null ? new Exception("Gemini request failed") : last;
-    }
-
-    private static int retryDelaySeconds(int code, int attempt, String retryAfter, String response) {
-        int server = parsePositiveSeconds(retryAfter);
-        if (server <= 0) server = parseRetryHint(response);
-        if (server > 0) return Math.max(2, Math.min(180, server + 1));
-        if (code == 429) {
-            int[] waits = {10, 20, 35, 50, 70, 90, 120, 150, 180};
-            return waits[Math.min(waits.length - 1, Math.max(0, attempt - 1))];
-        }
-        return Math.min(45, 4 * (1 << Math.min(4, attempt - 1)));
-    }
-
-    private static int parsePositiveSeconds(String value) {
-        if (value == null) return 0;
-        try { return Math.max(0, (int) Math.ceil(Double.parseDouble(value.trim()))); }
-        catch (Exception ignored) { return 0; }
-    }
-
-    private static int parseRetryHint(String response) {
-        if (response == null || response.isEmpty()) return 0;
-        Matcher m = Pattern.compile("(?i)(?:retry|retryDelay|retry in)[^0-9]{0,20}([0-9]+(?:\\.[0-9]+)?)\\s*s").matcher(response);
-        if (m.find()) return parsePositiveSeconds(m.group(1));
-        return 0;
+        throw last == null ? new TtsException(0, true, false, false, 30, "Gemini request failed", null) : last;
     }
 
     private AudioBlock parseAudio(String response) throws Exception {
@@ -158,7 +148,69 @@ final class GeminiTtsClient {
                 }
             }
         }
+        // This is usually transient. Throw a normal exception so request() retries it.
         throw new Exception("Gemini returned no audio");
+    }
+
+    private static boolean looksLikeApiKeyError(String response, String message) {
+        String value = (safe(response) + " " + safe(message)).toLowerCase(Locale.US);
+        return value.contains("api key") || value.contains("api_key") || value.contains("apikey") ||
+                value.contains("key invalid") || value.contains("invalid key") || value.contains("permission denied");
+    }
+
+    private static void awaitRequestSlot() throws InterruptedException {
+        while (true) {
+            long wait;
+            synchronized (PACER) {
+                long now = System.currentTimeMillis();
+                wait = Math.max(0L, nextRequestAtMs - now);
+                if (wait == 0L) {
+                    nextRequestAtMs = now + MIN_REQUEST_GAP_MS;
+                    return;
+                }
+            }
+            Thread.sleep(Math.min(wait, 1000L));
+        }
+    }
+
+    private static void markRequestSuccess() {
+        synchronized (PACER) {
+            nextRequestAtMs = Math.max(nextRequestAtMs, System.currentTimeMillis() + MIN_REQUEST_GAP_MS);
+        }
+    }
+
+    private static void pushPacer(int seconds) {
+        synchronized (PACER) {
+            nextRequestAtMs = Math.max(nextRequestAtMs, System.currentTimeMillis() + Math.max(1, seconds) * 1000L);
+        }
+    }
+
+    private static void sleepSeconds(int seconds) throws InterruptedException {
+        Thread.sleep(Math.max(1, seconds) * 1000L);
+    }
+
+    private static int retryDelaySeconds(int code, int attempt, String retryAfter, String response) {
+        int server = parsePositiveSeconds(retryAfter);
+        if (server <= 0) server = parseRetryHint(response);
+        if (server > 0) return Math.max(2, Math.min(180, server + 1));
+        if (code == 429) {
+            int[] waits = {12, 25, 45, 75, 120};
+            return waits[Math.min(waits.length - 1, Math.max(0, attempt - 1))];
+        }
+        return Math.min(45, 4 * (1 << Math.min(4, attempt - 1)));
+    }
+
+    private static int parsePositiveSeconds(String value) {
+        if (value == null) return 0;
+        try { return Math.max(0, (int) Math.ceil(Double.parseDouble(value.trim()))); }
+        catch (Exception ignored) { return 0; }
+    }
+
+    private static int parseRetryHint(String response) {
+        if (response == null || response.isEmpty()) return 0;
+        Matcher m = Pattern.compile("(?i)(?:retry|retryDelay|retry in)[^0-9]{0,20}([0-9]+(?:\\.[0-9]+)?)\\s*s").matcher(response);
+        if (m.find()) return parsePositiveSeconds(m.group(1));
+        return 0;
     }
 
     private static String prompt(String style, String text) {
@@ -285,7 +337,26 @@ final class GeminiTtsClient {
         return "Gemini request failed (HTTP " + code + ")";
     }
 
+    private static String safe(String value) { return value == null ? "" : value; }
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
+
+    static final class TtsException extends Exception {
+        final int statusCode;
+        final boolean retryable;
+        final boolean authenticationFailure;
+        final boolean rateLimited;
+        final int suggestedRetrySeconds;
+
+        TtsException(int statusCode, boolean retryable, boolean authenticationFailure, boolean rateLimited,
+                     int suggestedRetrySeconds, String message, Throwable cause) {
+            super(message, cause);
+            this.statusCode = statusCode;
+            this.retryable = retryable;
+            this.authenticationFailure = authenticationFailure;
+            this.rateLimited = rateLimited;
+            this.suggestedRetrySeconds = Math.max(0, suggestedRetrySeconds);
+        }
+    }
 
     static final class GenerationResult {
         final String speechText;
@@ -294,11 +365,6 @@ final class GeminiTtsClient {
             this.speechText = speechText;
             this.timings = timings;
         }
-    }
-
-    private static final class ApiException extends Exception {
-        final int statusCode;
-        ApiException(int statusCode, String message) { super(message); this.statusCode = statusCode; }
     }
 
     private static final class AudioBlock {

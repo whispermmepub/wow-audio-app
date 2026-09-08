@@ -16,8 +16,8 @@ android {
         applicationId 'com.whisper.wowaudio'
         minSdk 23
         targetSdk 36
-        versionCode 5
-        versionName '1.1.0'
+        versionCode 6
+        versionName '1.2.0'
     }
 
     signingConfigs {
@@ -50,4 +50,5 @@ android {
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation 'androidx.work:work-runtime:2.11.2'
 }
