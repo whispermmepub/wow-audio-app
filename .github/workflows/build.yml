@@ -19,6 +19,10 @@ permissions:
 jobs:
   android:
     runs-on: ubuntu-latest
+    env:
+      WOW_AUDIO_STORE_PASSWORD: ${{ secrets.WOW_AUDIO_STORE_PASSWORD }}
+      WOW_AUDIO_KEY_ALIAS: ${{ secrets.WOW_AUDIO_KEY_ALIAS }}
+      WOW_AUDIO_KEY_PASSWORD: ${{ secrets.WOW_AUDIO_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,17 +38,38 @@ jobs:
       - name: Install Android 16 SDK
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"'
 
-      - name: Verify handoff contract
+      - name: Configure stable update signing when secrets exist
+        shell: bash
+        env:
+          WOW_AUDIO_KEYSTORE_B64: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${WOW_AUDIO_KEYSTORE_B64:-}" && -n "${WOW_AUDIO_STORE_PASSWORD:-}" && -n "${WOW_AUDIO_KEY_ALIAS:-}" && -n "${WOW_AUDIO_KEY_PASSWORD:-}" ]]; then
+            KEYSTORE="$RUNNER_TEMP/wow-audio-update.jks"
+            printf '%s' "$WOW_AUDIO_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+            chmod 600 "$KEYSTORE"
+            echo "WOW_AUDIO_KEYSTORE_FILE=$KEYSTORE" >> "$GITHUB_ENV"
+            echo "WOW_AUDIO_STABLE_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            echo "WOW_AUDIO_STABLE_SIGNING=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify handoff and accessibility contracts
         shell: bash
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
+          grep -q "versionCode 5" app/build.gradle
+          grep -q "versionName '1.1.0'" app/build.gradle
           grep -q "com.whisper.wowaudio.action.OPEN_BOOK" app/src/main/AndroidManifest.xml
           grep -q "application/epub+zip" app/src/main/AndroidManifest.xml
           grep -q "application/pdf" app/src/main/AndroidManifest.xml
           grep -q "importToPrivateStorage" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           grep -q "SEND_MULTIPLE" app/src/main/AndroidManifest.xml
           grep -q "ShareImportActivity" app/src/main/AndroidManifest.xml
+          grep -q "NarrationGenerationService" app/src/main/AndroidManifest.xml
+          grep -q "Preparing automatically" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "setAccessibilityHeading" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           git diff --check
 
       - name: Build and lint
@@ -57,15 +82,33 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='4'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.0.1'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='5'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.1.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
 
-      - name: Upload debug test APK
+      - name: Verify stable signing certificate
+        if: env.WOW_AUDIO_STABLE_SIGNING == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.0.1-whole-book-share-fix-debug
+          name: WoW-Audio-v1.1.0-accessible-auto-audio-test
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 3
+
+      - name: Upload stable update APK
+        if: env.WOW_AUDIO_STABLE_SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.1.0-stable-update-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
