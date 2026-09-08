@@ -19,6 +19,7 @@ final class GeminiTtsClient {
     static final String MODEL = "gemini-3.1-flash-tts-preview";
     private static final String ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
     private static final int MAX_CHARS_PER_REQUEST = 5000;
+    private static final int MAX_ATTEMPTS = 3;
 
     interface Progress {
         void onChunk(int completed, int total);
@@ -40,30 +41,55 @@ final class GeminiTtsClient {
     }
 
     private AudioBlock request(String apiKey, String text, String voice, String style) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(ENDPOINT).openConnection();
-        c.setRequestMethod("POST");
-        c.setConnectTimeout(30000);
-        c.setReadTimeout(180000);
-        c.setDoOutput(true);
-        c.setRequestProperty("x-goog-api-key", apiKey);
-        c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        c.setRequestProperty("Api-Revision", "2026-05-20");
+        Exception last = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(ENDPOINT).openConnection();
+                c.setRequestMethod("POST");
+                c.setConnectTimeout(30000);
+                c.setReadTimeout(180000);
+                c.setDoOutput(true);
+                c.setRequestProperty("x-goog-api-key", apiKey);
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                c.setRequestProperty("Api-Revision", "2026-05-20");
 
-        JSONObject body = new JSONObject();
-        body.put("model", MODEL);
-        body.put("input", prompt(style, text));
-        body.put("response_format", new JSONObject().put("type", "audio"));
-        JSONArray speech = new JSONArray().put(new JSONObject().put("voice", empty(voice) ? NarrationSettings.DEFAULT_VOICE : voice));
-        body.put("generation_config", new JSONObject().put("speech_config", speech));
-        byte[] request = body.toString().getBytes(StandardCharsets.UTF_8);
-        c.setFixedLengthStreamingMode(request.length);
-        try (OutputStream out = c.getOutputStream()) { out.write(request); }
+                JSONObject body = new JSONObject();
+                body.put("model", MODEL);
+                body.put("input", prompt(style, text));
+                body.put("response_format", new JSONObject().put("type", "audio"));
+                JSONArray speech = new JSONArray().put(new JSONObject().put("voice", empty(voice) ? NarrationSettings.DEFAULT_VOICE : voice));
+                body.put("generation_config", new JSONObject().put("speech_config", speech));
+                byte[] request = body.toString().getBytes(StandardCharsets.UTF_8);
+                c.setFixedLengthStreamingMode(request.length);
+                try (OutputStream out = c.getOutputStream()) { out.write(request); }
 
-        int code = c.getResponseCode();
-        String response = readText(code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream());
-        c.disconnect();
-        if (code < 200 || code >= 300) throw new Exception(apiError(code, response));
+                int code = c.getResponseCode();
+                String response = readText(code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream());
+                if (code < 200 || code >= 300) {
+                    ApiException api = new ApiException(code, apiError(code, response));
+                    if (retryable(code) && attempt < MAX_ATTEMPTS) {
+                        last = api;
+                        sleepBackoff(attempt);
+                        continue;
+                    }
+                    throw api;
+                }
+                return parseAudio(response);
+            } catch (ApiException e) {
+                throw e;
+            } catch (Exception e) {
+                last = e;
+                if (attempt >= MAX_ATTEMPTS) throw e;
+                sleepBackoff(attempt);
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        throw last == null ? new Exception("Gemini request failed") : last;
+    }
 
+    private AudioBlock parseAudio(String response) throws Exception {
         JSONObject root = new JSONObject(response);
         JSONArray steps = root.optJSONArray("steps");
         if (steps != null) {
@@ -143,6 +169,12 @@ final class GeminiTtsClient {
         }
     }
 
+    private static boolean retryable(int code) { return code == 408 || code == 429 || code >= 500; }
+
+    private static void sleepBackoff(int attempt) throws InterruptedException {
+        Thread.sleep(Math.min(6000L, 750L * (1L << Math.max(0, attempt - 1))));
+    }
+
     private static String apiError(int code, String response) {
         try {
             JSONObject root = new JSONObject(response);
@@ -153,6 +185,11 @@ final class GeminiTtsClient {
     }
 
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
+
+    private static final class ApiException extends Exception {
+        final int statusCode;
+        ApiException(int statusCode, String message) { super(message); this.statusCode = statusCode; }
+    }
 
     private static final class AudioBlock {
         final byte[] data;
