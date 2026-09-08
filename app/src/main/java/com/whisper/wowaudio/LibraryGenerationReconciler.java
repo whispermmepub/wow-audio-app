@@ -11,7 +11,7 @@ final class LibraryGenerationReconciler {
     static void reconcile(Context context) {
         if (context == null) return;
         Context app = context.getApplicationContext();
-        if (!new SecretStore(app).hasApiKey()) return;
+        if (!new NarrationSettings(app).narrationAvailable()) return;
 
         File library = new File(app.getFilesDir(), "library");
         File[] files = library.listFiles();
@@ -22,8 +22,8 @@ final class LibraryGenerationReconciler {
         for (File file : files) {
             if (!file.isFile() || !file.getName().toLowerCase(Locale.US).endsWith(".epub")) continue;
             if (store.get(file.getName()) == null) {
-                // Legacy v1.1 and interrupted pre-v1.2 books have no durable job.
-                // Start at chapter 0; the engine skips chapters already cached.
+                // Upgrade and interrupted books may have no durable job.
+                // Start at chapter 0; the engine skips chapters already cached for the active engine.
                 store.enqueue(file.getName(), false);
                 added = true;
             }
