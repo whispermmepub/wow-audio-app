@@ -95,7 +95,8 @@ final class NarrationUi {
         hero.setGravity(Gravity.CENTER_VERTICAL);
         ImageView cover = new ImageView(activity);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap coverBitmap = bitmap(book.cover);
+        byte[] coverBytes = book.cover != null ? book.cover : BookCoverLoader.load(activity, book.bookId);
+        Bitmap coverBitmap = bitmap(coverBytes);
         if (coverBitmap != null) cover.setImageBitmap(coverBitmap); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
         hero.addView(cover, new LinearLayout.LayoutParams(dp(78), dp(114)));
         LinearLayout heroText = columnTransparent();
@@ -574,6 +575,9 @@ final class NarrationUi {
         final List<ChapterInput> chapters;
         BookInput(String bookId, String title, String author, byte[] cover, List<ChapterInput> chapters) {
             this.bookId = bookId; this.title = title; this.author = author; this.cover = cover; this.chapters = chapters;
+        }
+        BookInput(String bookId, String title, String author, List<ChapterInput> chapters) {
+            this(bookId, title, author, null, chapters);
         }
     }
 
