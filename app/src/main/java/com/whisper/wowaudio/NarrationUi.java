@@ -32,6 +32,16 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class NarrationUi {
+    private static final String[] ENGINE_LABELS = {
+            "Automatic — offline Burmese first",
+            "Offline Burmese — eSpeak NG",
+            "Gemini natural voice"
+    };
+    private static final String[] ENGINE_VALUES = {
+            NarrationSettings.ENGINE_AUTO,
+            NarrationSettings.ENGINE_OFFLINE,
+            NarrationSettings.ENGINE_GEMINI
+    };
     private static final String[] VOICES = {
             "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
             "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
@@ -60,14 +70,15 @@ final class NarrationUi {
     private final NarrationSettings settings;
     private final AudioCache cache;
     private final ListeningProgressStore progressStore;
-    private final GeminiTtsClient client = new GeminiTtsClient();
-    private final AtomicBoolean generating = new AtomicBoolean(false);
-    private EditText apiKey;
-    private EditText style;
+    private final AtomicBoolean previewing = new AtomicBoolean(false);
+
+    private Spinner engine;
     private Spinner voice;
     private Spinner stylePreset;
     private Spinner speed;
     private Spinner sleep;
+    private EditText apiKey;
+    private EditText style;
     private TextView status;
 
     NarrationUi(Activity activity, BookInput book, Runnable onBack) {
@@ -83,251 +94,328 @@ final class NarrationUi {
     void show() {
         ScrollView scroll = new ScrollView(activity);
         LinearLayout root = column();
-        root.setPadding(dp(22), dp(20), dp(22), dp(42));
+        root.setPadding(dp(20), dp(18), dp(20), dp(42));
         scroll.addView(root);
+        if (Build.VERSION.SDK_INT >= 28) root.setAccessibilityPaneTitle("Narration settings");
 
-        TextView back = text("‹  Book", 15, Color.rgb(86, 78, 62), true);
-        back.setPadding(0, dp(8), 0, dp(18));
+        Button back = secondaryButton("Back to book");
         back.setOnClickListener(v -> onBack.run());
-        root.addView(back);
+        root.addView(back, fullButton());
 
         LinearLayout hero = new LinearLayout(activity);
         hero.setGravity(Gravity.CENTER_VERTICAL);
+        hero.setPadding(0, dp(18), 0, dp(8));
         ImageView cover = new ImageView(activity);
+        cover.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         byte[] coverBytes = book.cover != null ? book.cover : BookCoverLoader.load(activity, book.bookId);
         Bitmap coverBitmap = bitmap(coverBytes);
         if (coverBitmap != null) cover.setImageBitmap(coverBitmap); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
-        hero.addView(cover, new LinearLayout.LayoutParams(dp(78), dp(114)));
-        LinearLayout heroText = columnTransparent();
-        heroText.setPadding(dp(16), 0, 0, 0);
-        heroText.addView(text(book.title, 22, Color.rgb(24, 27, 29), true));
-        TextView heroAuthor = text(book.author, 13, Color.rgb(103, 101, 95), false);
-        heroAuthor.setPadding(0, dp(5), 0, dp(8));
-        heroText.addView(heroAuthor);
-        heroText.addView(text("Gemini 3.1 Flash TTS • private BYOK", 11, Color.rgb(119, 116, 108), false));
+        hero.addView(cover, new LinearLayout.LayoutParams(dp(72), dp(104)));
+        LinearLayout heroText = transparentColumn();
+        heroText.setPadding(dp(15), 0, 0, 0);
+        TextView bookTitle = heading(book.title, 22);
+        heroText.addView(bookTitle);
+        TextView author = text(book.author, 13, Color.rgb(103, 101, 95), false);
+        author.setPadding(0, dp(4), 0, dp(5));
+        heroText.addView(author);
+        heroText.addView(text("Current voice: " + settings.engineLabel(), 12, Color.rgb(82, 94, 77), true));
         hero.addView(heroText, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(hero);
 
-        LinearLayout setup = card();
-        LinearLayout.LayoutParams setupParams = new LinearLayout.LayoutParams(-1, -2); setupParams.topMargin = dp(18); setup.setLayoutParams(setupParams);
-        setup.addView(text("Narration setup", 17, Color.rgb(35, 36, 36), true));
-        TextView privacy = text("Your Gemini key stays encrypted on this device and is excluded from app backup.", 11, Color.rgb(112, 109, 103), false);
-        privacy.setPadding(0, dp(4), 0, dp(12));
-        setup.addView(privacy);
+        LinearLayout engineCard = card();
+        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, -2);
+        ep.topMargin = dp(10);
+        engineCard.setLayoutParams(ep);
+        engineCard.addView(heading("Voice engine", 19));
+        TextView explanation = text("Automatic is recommended. If eSpeak NG is installed, Burmese narration is generated on this phone without internet or an API key. Otherwise WoW Audio uses Gemini when a key is available.", 13, Color.rgb(86, 84, 79), false);
+        explanation.setLineSpacing(0, 1.25f);
+        explanation.setPadding(0, dp(5), 0, dp(10));
+        engineCard.addView(explanation);
+
+        engine = new Spinner(activity);
+        engine.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, ENGINE_LABELS));
+        engine.setSelection(findEngine(settings.engineMode()));
+        engine.setContentDescription("Narration engine. " + ENGINE_LABELS[findEngine(settings.engineMode())]);
+        engineCard.addView(engine, new LinearLayout.LayoutParams(-1, -2));
+
+        if (!OfflineBurmeseTtsClient.isEspeakInstalled(activity)) {
+            Button install = primaryButton("Install Offline Burmese Voice");
+            install.setContentDescription("Install free offline Burmese voice using the official eSpeak NG Android app.");
+            LinearLayout.LayoutParams ip = fullButton();
+            ip.topMargin = dp(10);
+            engineCard.addView(install, ip);
+            install.setOnClickListener(v -> activity.startActivity(new Intent(activity, OfflineVoiceSetupActivity.class)));
+        } else {
+            TextView ready = text("✓ Offline Burmese voice installed", 13, Color.rgb(61, 99, 66), true);
+            ready.setPadding(0, dp(9), 0, 0);
+            engineCard.addView(ready);
+        }
+        root.addView(engineCard);
+
+        LinearLayout geminiCard = card();
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-1, -2);
+        gp.topMargin = dp(10);
+        geminiCard.setLayoutParams(gp);
+        geminiCard.addView(heading("Gemini natural voice — optional", 18));
+        TextView privacy = text("Only needed for Gemini. Your API key is encrypted on this device and excluded from Android backup.", 12, Color.rgb(103, 101, 95), false);
+        privacy.setPadding(0, dp(5), 0, dp(8));
+        geminiCard.addView(privacy);
 
         apiKey = new EditText(activity);
         apiKey.setSingleLine(true);
         apiKey.setTextSize(14);
         apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        apiKey.setHint(secrets.hasApiKey() ? "API key saved securely — leave blank to keep" : "Paste Gemini API key");
-        setup.addView(apiKey, new LinearLayout.LayoutParams(-1, -2));
+        apiKey.setHint(secrets.hasApiKey() ? "Gemini API key saved — leave blank to keep" : "Paste Gemini API key, optional");
+        apiKey.setContentDescription(secrets.hasApiKey() ? "Gemini API key. A key is already saved securely. Leave blank to keep it." : "Gemini API key, optional.");
+        geminiCard.addView(apiKey, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout keyActions = new LinearLayout(activity);
-        keyActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button test = secondaryButton("Test + preview voice");
-        Button forget = secondaryButton("Forget API key");
-        keyActions.addView(test, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams forgetParams = new LinearLayout.LayoutParams(0, -2, 1); forgetParams.leftMargin = dp(7);
-        keyActions.addView(forget, forgetParams);
-        LinearLayout.LayoutParams keyParams = new LinearLayout.LayoutParams(-1, -2); keyParams.topMargin = dp(7);
-        setup.addView(keyActions, keyParams);
-        forget.setEnabled(secrets.hasApiKey());
-        forget.setOnClickListener(v -> forgetApiKey());
-        test.setOnClickListener(v -> testAndPreview());
-
-        TextView vlabel = text("Voice", 14, Color.rgb(35, 36, 36), true);
-        vlabel.setPadding(0, dp(14), 0, dp(4));
-        setup.addView(vlabel);
+        TextView voiceLabel = text("Gemini voice", 13, Color.rgb(56, 56, 52), true);
+        voiceLabel.setPadding(0, dp(10), 0, dp(3));
+        geminiCard.addView(voiceLabel);
         voice = new Spinner(activity);
         voice.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, VOICES));
         voice.setSelection(findVoice(settings.voice()));
-        setup.addView(voice, new LinearLayout.LayoutParams(-1, -2));
+        geminiCard.addView(voice, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView presetLabel = text("Style preset", 14, Color.rgb(35, 36, 36), true);
-        presetLabel.setPadding(0, dp(14), 0, dp(4));
-        setup.addView(presetLabel);
+        TextView presetLabel = text("Gemini style", 13, Color.rgb(56, 56, 52), true);
+        presetLabel.setPadding(0, dp(10), 0, dp(3));
+        geminiCard.addView(presetLabel);
         stylePreset = new Spinner(activity);
         stylePreset.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, STYLE_LABELS));
         stylePreset.setSelection(findStylePreset(settings.style()));
-        setup.addView(stylePreset, new LinearLayout.LayoutParams(-1, -2));
+        geminiCard.addView(stylePreset, new LinearLayout.LayoutParams(-1, -2));
 
-        Button usePreset = secondaryButton("Use selected style");
-        LinearLayout.LayoutParams upp = new LinearLayout.LayoutParams(-1, -2); upp.topMargin = dp(6);
-        setup.addView(usePreset, upp);
+        Button applyPreset = secondaryButton("Use selected style");
+        LinearLayout.LayoutParams app = fullButton();
+        app.topMargin = dp(6);
+        geminiCard.addView(applyPreset, app);
 
-        TextView slabel = text("Narration direction", 14, Color.rgb(35, 36, 36), true);
-        slabel.setPadding(0, dp(14), 0, dp(4));
-        setup.addView(slabel);
         style = new EditText(activity);
         style.setText(settings.style());
         style.setTextSize(13);
         style.setMinLines(3);
         style.setGravity(Gravity.TOP | Gravity.START);
-        setup.addView(style, new LinearLayout.LayoutParams(-1, -2));
-        usePreset.setOnClickListener(v -> useSelectedPreset());
+        style.setContentDescription("Custom Gemini narration direction");
+        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, -2);
+        stp.topMargin = dp(6);
+        geminiCard.addView(style, stp);
+        applyPreset.setOnClickListener(v -> useSelectedPreset());
 
-        Button save = button("Save narration settings");
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = dp(14);
-        setup.addView(save, sp);
-        save.setOnClickListener(v -> saveSettings(true));
-        root.addView(setup);
+        LinearLayout geminiActions = new LinearLayout(activity);
+        geminiActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button preview = secondaryButton("Preview selected voice");
+        Button forget = secondaryButton("Forget Gemini key");
+        geminiActions.addView(preview, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(0, -2, 1);
+        fp.leftMargin = dp(7);
+        geminiActions.addView(forget, fp);
+        LinearLayout.LayoutParams ga = new LinearLayout.LayoutParams(-1, -2);
+        ga.topMargin = dp(8);
+        geminiCard.addView(geminiActions, ga);
+        preview.setOnClickListener(v -> previewSelectedEngine());
+        forget.setEnabled(secrets.hasApiKey());
+        forget.setOnClickListener(v -> forgetApiKey());
+        root.addView(geminiCard);
+
+        Button save = primaryButton("Save voice settings");
+        LinearLayout.LayoutParams sv = fullButton();
+        sv.topMargin = dp(12);
+        root.addView(save, sv);
+        save.setOnClickListener(v -> {
+            if (saveSettings(true) && settings.narrationAvailable()) {
+                NarrationGenerationService.enqueue(activity, book.bookId);
+                status.setText("Saved. This book will prepare automatically with " + settings.engineLabel() + ".");
+            }
+        });
+
+        status = text(cacheStatus(), 13, Color.rgb(84, 82, 77), false);
+        status.setLineSpacing(0, 1.2f);
+        status.setPadding(0, dp(16), 0, dp(8));
+        root.addView(status);
+
+        LinearLayout actionCard = card();
+        actionCard.addView(heading("Book preparation", 18));
+        Button prepare = primaryButton("Prepare or retry all chapters");
+        prepare.setContentDescription("Prepare or retry all chapters automatically in the background.");
+        LinearLayout.LayoutParams pp = fullButton();
+        pp.topMargin = dp(9);
+        actionCard.addView(prepare, pp);
+        prepare.setOnClickListener(v -> prepareBook());
+
+        Button play = primaryButton("Play available audio");
+        LinearLayout.LayoutParams pl = fullButton();
+        pl.topMargin = dp(8);
+        actionCard.addView(play, pl);
+        play.setOnClickListener(v -> playQueue(0, 0));
+
+        Button follow = secondaryButton("Follow Text player");
+        LinearLayout.LayoutParams fl = fullButton();
+        fl.topMargin = dp(8);
+        actionCard.addView(follow, fl);
+        follow.setOnClickListener(v -> new FollowAlongUi(activity, book, this::show).show());
+
+        Button clear = secondaryButton("Clear downloaded narration for this app");
+        LinearLayout.LayoutParams cl = fullButton();
+        cl.topMargin = dp(8);
+        actionCard.addView(clear, cl);
+        clear.setOnClickListener(v -> {
+            cache.clear();
+            progressStore.clear(book.bookId);
+            NarrationGenerationService.enqueue(activity, book.bookId);
+            Toast.makeText(activity, "Downloaded narration cleared. Preparation restarted.", Toast.LENGTH_LONG).show();
+            show();
+        });
+        root.addView(actionCard);
 
         LinearLayout playback = card();
-        LinearLayout.LayoutParams playCard = new LinearLayout.LayoutParams(-1, -2); playCard.topMargin = dp(12); playback.setLayoutParams(playCard);
-        playback.addView(text("Listening", 17, Color.rgb(35, 36, 36), true));
+        LinearLayout.LayoutParams pb = new LinearLayout.LayoutParams(-1, -2);
+        pb.topMargin = dp(10);
+        playback.setLayoutParams(pb);
+        playback.addView(heading("Listening controls", 18));
 
         ListeningProgressStore.Entry resume = resumableEntry();
         if (resume != null) {
-            int pct = ListeningProgressStore.percent(resume);
-            Button resumeButton = button("▶  Resume • Chapter " + (resume.chapterIndex + 1) + " • " + pct + "%");
-            LinearLayout.LayoutParams rbp = new LinearLayout.LayoutParams(-1, -2); rbp.topMargin = dp(10);
-            playback.addView(resumeButton, rbp);
+            Button resumeButton = primaryButton("Resume chapter " + (resume.chapterIndex + 1) + " • " + ListeningProgressStore.percent(resume) + "%");
+            LinearLayout.LayoutParams rb = fullButton();
+            rb.topMargin = dp(8);
+            playback.addView(resumeButton, rb);
             resumeButton.setOnClickListener(v -> playQueue(resume.chapterIndex, resume.positionMs));
         }
 
-        TextView speedLabel = text("Speed", 13, Color.rgb(92, 90, 85), false);
-        speedLabel.setPadding(0, dp(10), 0, dp(3));
+        TextView speedLabel = text("Playback speed", 13, Color.rgb(72, 71, 67), true);
+        speedLabel.setPadding(0, dp(9), 0, dp(3));
         playback.addView(speedLabel);
         speed = new Spinner(activity);
         speed.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, SPEED_LABELS));
         speed.setSelection(findSpeed(settings.speed()));
         playback.addView(speed, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView sleepLabel = text("Sleep timer", 13, Color.rgb(92, 90, 85), false);
-        sleepLabel.setPadding(0, dp(10), 0, dp(3));
+        TextView sleepLabel = text("Sleep timer", 13, Color.rgb(72, 71, 67), true);
+        sleepLabel.setPadding(0, dp(9), 0, dp(3));
         playback.addView(sleepLabel);
         sleep = new Spinner(activity);
         sleep.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, SLEEP_LABELS));
         sleep.setSelection(findSleep(settings.sleepMinutes()));
         playback.addView(sleep, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout listeningActions = new LinearLayout(activity);
-        Button applyPlayback = secondaryButton("Apply speed / timer");
-        Button follow = button("Follow Text");
-        listeningActions.addView(applyPlayback, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams followParams = new LinearLayout.LayoutParams(0, -2, 1); followParams.leftMargin = dp(7);
-        listeningActions.addView(follow, followParams);
-        LinearLayout.LayoutParams lap = new LinearLayout.LayoutParams(-1, -2); lap.topMargin = dp(12);
-        playback.addView(listeningActions, lap);
+        Button applyPlayback = secondaryButton("Apply speed and sleep timer");
+        LinearLayout.LayoutParams ap = fullButton();
+        ap.topMargin = dp(8);
+        playback.addView(applyPlayback, ap);
         applyPlayback.setOnClickListener(v -> {
             savePlaybackSettings();
             sendPlaybackSettings();
             Toast.makeText(activity, "Playback settings applied", Toast.LENGTH_SHORT).show();
         });
-        follow.setOnClickListener(v -> new FollowAlongUi(activity, book, this::show).show());
 
-        Button stopPlayback = secondaryButton("Stop playback");
-        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, -2); stp.topMargin = dp(7);
-        playback.addView(stopPlayback, stp);
-        stopPlayback.setOnClickListener(v -> command(PlaybackService.ACTION_STOP));
+        Button stop = secondaryButton("Stop playback");
+        LinearLayout.LayoutParams stopParams = fullButton();
+        stopParams.topMargin = dp(7);
+        playback.addView(stop, stopParams);
+        stop.setOnClickListener(v -> command(PlaybackService.ACTION_STOP));
         root.addView(playback);
 
-        status = text(cacheStatus(), 12, Color.rgb(112, 109, 103), false);
-        status.setPadding(0, dp(18), 0, dp(10));
-        root.addView(status);
-
-        LinearLayout actions = new LinearLayout(activity);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button all = button("Generate whole book");
-        actions.addView(all, new LinearLayout.LayoutParams(0, -2, 1));
-        Button play = button("Play offline");
-        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(0, -2, 1); pp.leftMargin = dp(8);
-        actions.addView(play, pp);
-        root.addView(actions);
-        all.setOnClickListener(v -> generateAll());
-        play.setOnClickListener(v -> playQueue(0, 0));
-
-        Button clear = secondaryButton("Clear offline audio cache");
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2); cp.topMargin = dp(8);
-        root.addView(clear, cp);
-        clear.setOnClickListener(v -> {
-            cache.clear();
-            progressStore.clear(book.bookId);
-            Toast.makeText(activity, "Offline audio cleared", Toast.LENGTH_SHORT).show();
-            show();
-        });
-
-        TextView ch = text("Chapters", 18, Color.rgb(24, 27, 29), true);
-        ch.setPadding(0, dp(26), 0, dp(7));
-        root.addView(ch);
+        TextView chapterHeading = heading("Chapters", 18);
+        chapterHeading.setPadding(0, dp(24), 0, dp(4));
+        root.addView(chapterHeading);
         for (int i = 0; i < book.chapters.size(); i++) root.addView(chapterCard(i));
+
         activity.setContentView(scroll);
     }
 
     private View chapterCard(int index) {
         ChapterInput chapter = book.chapters.get(index);
         LinearLayout row = card();
-        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2); rp.topMargin = dp(9); row.setLayoutParams(rp);
-        row.addView(text((index + 1) + "  " + chapter.title, 15, Color.rgb(35, 36, 36), true));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+        rp.topMargin = dp(7);
+        row.setLayoutParams(rp);
+        row.addView(text((index + 1) + ". " + chapter.title, 15, Color.rgb(42, 42, 39), true));
         File audio = audioFile(index);
         boolean ready = cache.isReady(audio);
-        boolean followReady = cache.hasFollowData(audio);
-        String label = ready ? (followReady ? "Offline audio + Follow Text ready" : "Offline audio ready") : "Not generated";
-        TextView state = text(label, 12, ready ? Color.rgb(69, 106, 74) : Color.rgb(126, 122, 113), false);
-        state.setPadding(0, dp(5), 0, dp(8));
+        TextView state = text(ready ? "Ready offline" : "Preparing automatically", 12,
+                ready ? Color.rgb(61, 99, 66) : Color.rgb(103, 101, 95), false);
+        state.setPadding(0, dp(4), 0, 0);
         row.addView(state);
-        LinearLayout actions = new LinearLayout(activity);
-        Button primary = button(ready ? "▶  Play" : "Generate");
-        actions.addView(primary, new LinearLayout.LayoutParams(0, -2, 1));
         if (ready) {
-            Button follow = secondaryButton("Follow");
-            LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(0, -2, 1); fp.leftMargin = dp(7);
-            actions.addView(follow, fp);
-            follow.setOnClickListener(v -> {
-                playQueue(index, 0);
-                new FollowAlongUi(activity, book, this::show).show();
-            });
-            primary.setOnClickListener(v -> playQueue(index, 0));
-        } else primary.setOnClickListener(v -> generateChapter(index, true));
-        row.addView(actions, new LinearLayout.LayoutParams(-1, -2));
+            Button play = secondaryButton("Play chapter " + (index + 1));
+            LinearLayout.LayoutParams p = fullButton();
+            p.topMargin = dp(6);
+            row.addView(play, p);
+            play.setOnClickListener(v -> playQueue(index, 0));
+        }
         return row;
     }
 
-    private void testAndPreview() {
+    private void prepareBook() {
         if (!saveSettings(false)) return;
-        String key = secrets.getApiKey();
-        if (key.isEmpty()) { Toast.makeText(activity, "Add your Gemini API key first", Toast.LENGTH_LONG).show(); return; }
-        if (!generating.compareAndSet(false, true)) { Toast.makeText(activity, "Narration generation is already running", Toast.LENGTH_SHORT).show(); return; }
-        status.setText("Testing Gemini and generating voice preview…");
+        if (!settings.narrationAvailable()) {
+            Toast.makeText(activity, "Set up the offline Burmese voice or Gemini once", Toast.LENGTH_LONG).show();
+            activity.startActivity(new Intent(activity, OfflineVoiceSetupActivity.class));
+            return;
+        }
+        NarrationGenerationService.enqueue(activity, book.bookId);
+        String message = "Preparing all chapters automatically with " + settings.engineLabel();
+        status.setText(message);
+        Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
+    }
+
+    private void previewSelectedEngine() {
+        if (!saveSettings(false)) return;
+        if (!previewing.compareAndSet(false, true)) return;
+        status.setText("Preparing voice preview…");
         new Thread(() -> {
-            File preview = new File(activity.getCacheDir(), "wow-audio-voice-preview.wav");
+            File preview = new File(activity.getCacheDir(), "wow-audio-selected-voice-preview.wav");
             try {
-                client.generateToWav(key,
-                        "မင်္ဂလာပါ။ ဒီအသံက WoW Audio အတွက် စမ်းသပ်နားထောင်နိုင်တဲ့ အသံနမူနာ ဖြစ်ပါတယ်။ Welcome to WoW Audio.",
-                        settings.voice(), settings.style(), preview, null);
+                String sample = "မင်္ဂလာပါ။ ဒီအသံက WoW Audio မြန်မာစာဖတ်အသံ စမ်းသပ်ချက် ဖြစ်ပါတယ်။";
+                if (settings.useOfflineEngine()) {
+                    OfflineBurmeseTtsClient.generateToWav(activity, sample, preview, null);
+                } else {
+                    String key = secrets.getApiKey();
+                    if (key.isEmpty()) throw new Exception("Add your Gemini API key first, or install the offline Burmese voice.");
+                    new GeminiTtsClient().generateToWav(key, sample, settings.voice(), settings.style(), preview, null);
+                }
                 activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    status.setText("API connection works • preview playing");
+                    previewing.set(false);
+                    status.setText("Preview playing • " + settings.engineLabel());
                     playLocalPreview(preview);
                 });
             } catch (Exception e) {
                 activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    status.setText("API test failed");
+                    previewing.set(false);
+                    status.setText("Preview failed");
                     Toast.makeText(activity, friendlyError(e), Toast.LENGTH_LONG).show();
                 });
             }
-        }, "wow-audio-tts-preview").start();
+        }, "wow-audio-voice-preview").start();
     }
 
     private void playLocalPreview(File file) {
         try {
             MediaPlayer player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
             player.setDataSource(file.getAbsolutePath());
-            player.setOnCompletionListener(mp -> { try { mp.release(); } catch (Exception ignored) { } });
+            player.setOnCompletionListener(mp -> {
+                try { mp.release(); } catch (Exception ignored) { }
+                if (file.exists()) file.delete();
+                File sidecar = AudioTimingStore.sidecar(file);
+                if (sidecar.exists()) sidecar.delete();
+            });
             player.prepare();
             player.start();
         } catch (Exception e) {
-            Toast.makeText(activity, "Preview generated, but playback could not start", Toast.LENGTH_LONG).show();
+            Toast.makeText(activity, "Preview was generated but playback could not start", Toast.LENGTH_LONG).show();
         }
     }
 
     private void forgetApiKey() {
         try {
             secrets.setApiKey("");
-            Toast.makeText(activity, "Saved API key removed", Toast.LENGTH_SHORT).show();
+            if (NarrationSettings.ENGINE_GEMINI.equals(settings.engineMode())) settings.saveEngineMode(NarrationSettings.ENGINE_AUTO);
+            Toast.makeText(activity, "Saved Gemini API key removed", Toast.LENGTH_SHORT).show();
             show();
         } catch (Exception e) {
             Toast.makeText(activity, "Unable to remove saved API key", Toast.LENGTH_LONG).show();
@@ -339,92 +427,65 @@ final class NarrationUi {
         if (index >= 0 && index < STYLE_PROMPTS.length && !STYLE_PROMPTS[index].isEmpty()) style.setText(STYLE_PROMPTS[index]);
         if (index == STYLE_PROMPTS.length - 1) {
             style.requestFocus();
-            Toast.makeText(activity, "Edit the narration direction for your custom style", Toast.LENGTH_SHORT).show();
+            Toast.makeText(activity, "Edit the narration direction for your custom Gemini style", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private void generateChapter(int index, boolean autoPlay) {
-        if (!saveSettings(false)) return;
-        String key = secrets.getApiKey();
-        if (key.isEmpty()) { Toast.makeText(activity, "Add your Gemini API key first", Toast.LENGTH_LONG).show(); return; }
-        if (!generating.compareAndSet(false, true)) { Toast.makeText(activity, "Narration generation is already running", Toast.LENGTH_SHORT).show(); return; }
-        ChapterInput chapter = book.chapters.get(index);
-        File target = audioFile(index);
-        status.setText("Generating chapter " + (index + 1) + "…");
-        new Thread(() -> {
-            try {
-                if (!cache.isReady(target) || !cache.hasFollowData(target)) client.generateToWav(key, chapter.text, settings.voice(), settings.style(), target,
-                        (done, total) -> activity.runOnUiThread(() -> status.setText("Chapter " + (index + 1) + " • part " + done + "/" + total)));
-                activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    Toast.makeText(activity, "Chapter saved offline", Toast.LENGTH_SHORT).show();
-                    if (autoPlay) playQueue(index, 0); else show();
-                });
-            } catch (Exception e) {
-                activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    status.setText("Generation failed");
-                    Toast.makeText(activity, friendlyError(e), Toast.LENGTH_LONG).show();
-                });
-            }
-        }, "wow-audio-tts-chapter").start();
-    }
+    private boolean saveSettings(boolean toast) {
+        try {
+            int engineIndex = engine == null ? findEngine(settings.engineMode()) : Math.max(0, Math.min(ENGINE_VALUES.length - 1, engine.getSelectedItemPosition()));
+            settings.saveEngineMode(ENGINE_VALUES[engineIndex]);
 
-    private void generateAll() {
-        if (!saveSettings(false)) return;
-        String key = secrets.getApiKey();
-        if (key.isEmpty()) { Toast.makeText(activity, "Add your Gemini API key first", Toast.LENGTH_LONG).show(); return; }
-        if (book.chapters.isEmpty()) return;
-        if (!generating.compareAndSet(false, true)) { Toast.makeText(activity, "Narration generation is already running", Toast.LENGTH_SHORT).show(); return; }
-        new Thread(() -> {
-            try {
-                for (int i = 0; i < book.chapters.size(); i++) {
-                    final int chapterIndex = i;
-                    ChapterInput chapter = book.chapters.get(i);
-                    File target = audioFile(i);
-                    activity.runOnUiThread(() -> status.setText("Generating chapter " + (chapterIndex + 1) + "/" + book.chapters.size()));
-                    if (!cache.isReady(target) || !cache.hasFollowData(target)) client.generateToWav(key, chapter.text, settings.voice(), settings.style(), target,
-                            (done, total) -> activity.runOnUiThread(() -> status.setText("Chapter " + (chapterIndex + 1) + "/" + book.chapters.size() + " • part " + done + "/" + total)));
-                }
-                activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    Toast.makeText(activity, "Whole book is ready offline", Toast.LENGTH_LONG).show();
-                    show();
-                });
-            } catch (Exception e) {
-                activity.runOnUiThread(() -> {
-                    generating.set(false);
-                    status.setText("Generation stopped");
-                    Toast.makeText(activity, friendlyError(e), Toast.LENGTH_LONG).show();
-                });
+            String typed = apiKey == null ? "" : apiKey.getText().toString().trim();
+            if (!typed.isEmpty()) secrets.setApiKey(typed);
+            String selectedVoice = voice == null || voice.getSelectedItem() == null ? NarrationSettings.DEFAULT_VOICE : voice.getSelectedItem().toString();
+            String direction = style == null ? NarrationSettings.DEFAULT_STYLE : style.getText().toString();
+            settings.save(selectedVoice, direction);
+
+            if (apiKey != null) {
+                apiKey.setText("");
+                apiKey.setHint(secrets.hasApiKey() ? "Gemini API key saved — leave blank to keep" : "Paste Gemini API key, optional");
             }
-        }, "wow-audio-tts-book").start();
+            if (NarrationSettings.ENGINE_OFFLINE.equals(settings.engineMode()) && !OfflineBurmeseTtsClient.isEspeakInstalled(activity)) {
+                if (toast) Toast.makeText(activity, "Install the offline Burmese voice to use Offline mode", Toast.LENGTH_LONG).show();
+            } else if (toast) {
+                Toast.makeText(activity, "Voice settings saved • " + settings.engineLabel(), Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        } catch (Exception e) {
+            Toast.makeText(activity, "Unable to save voice settings securely", Toast.LENGTH_LONG).show();
+            return false;
+        }
     }
 
     private void playQueue(int startChapter, long startPosition) {
         savePlaybackSettings();
+        if (book.chapters.isEmpty()) return;
         int start = Math.max(0, Math.min(book.chapters.size() - 1, startChapter));
         ArrayList<String> paths = new ArrayList<>();
         ArrayList<String> titles = new ArrayList<>();
         for (int i = start; i < book.chapters.size(); i++) {
-            File f = audioFile(i);
-            if (!cache.isReady(f)) break;
-            paths.add(f.getAbsolutePath());
+            File file = audioFile(i);
+            if (!cache.isReady(file)) break;
+            paths.add(file.getAbsolutePath());
             titles.add(book.chapters.get(i).title);
         }
-        if (paths.isEmpty()) { Toast.makeText(activity, "Generate this chapter first", Toast.LENGTH_SHORT).show(); return; }
+        if (paths.isEmpty()) {
+            Toast.makeText(activity, "Audio is still being prepared", Toast.LENGTH_SHORT).show();
+            return;
+        }
         requestNotifications();
-        Intent i = new Intent(activity, PlaybackService.class).setAction(PlaybackService.ACTION_PLAY_QUEUE);
-        i.putStringArrayListExtra(PlaybackService.EXTRA_PATHS, paths);
-        i.putStringArrayListExtra(PlaybackService.EXTRA_TITLES, titles);
-        i.putExtra(PlaybackService.EXTRA_BOOK_ID, book.bookId);
-        i.putExtra(PlaybackService.EXTRA_BOOK_TITLE, book.title);
-        i.putExtra(PlaybackService.EXTRA_AUTHOR, book.author);
-        i.putExtra(PlaybackService.EXTRA_START_CHAPTER, start);
-        i.putExtra(PlaybackService.EXTRA_START_POSITION, Math.max(0, startPosition));
-        i.putExtra(PlaybackService.EXTRA_SPEED, settings.speed());
-        i.putExtra(PlaybackService.EXTRA_MINUTES, settings.sleepMinutes());
-        if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(i); else activity.startService(i);
+        Intent intent = new Intent(activity, PlaybackService.class).setAction(PlaybackService.ACTION_PLAY_QUEUE);
+        intent.putStringArrayListExtra(PlaybackService.EXTRA_PATHS, paths);
+        intent.putStringArrayListExtra(PlaybackService.EXTRA_TITLES, titles);
+        intent.putExtra(PlaybackService.EXTRA_BOOK_ID, book.bookId);
+        intent.putExtra(PlaybackService.EXTRA_BOOK_TITLE, book.title);
+        intent.putExtra(PlaybackService.EXTRA_AUTHOR, book.author);
+        intent.putExtra(PlaybackService.EXTRA_START_CHAPTER, start);
+        intent.putExtra(PlaybackService.EXTRA_START_POSITION, Math.max(0, startPosition));
+        intent.putExtra(PlaybackService.EXTRA_SPEED, settings.speed());
+        intent.putExtra(PlaybackService.EXTRA_MINUTES, settings.sleepMinutes());
+        if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(intent); else activity.startService(intent);
     }
 
     private ListeningProgressStore.Entry resumableEntry() {
@@ -439,22 +500,6 @@ final class NarrationUi {
                     next, 0, 0, audioFile(next).getAbsolutePath(), System.currentTimeMillis());
         }
         return entry;
-    }
-
-    private boolean saveSettings(boolean toast) {
-        try {
-            String typed = apiKey == null ? "" : apiKey.getText().toString().trim();
-            if (!typed.isEmpty()) secrets.setApiKey(typed);
-            String selected = voice == null || voice.getSelectedItem() == null ? NarrationSettings.DEFAULT_VOICE : voice.getSelectedItem().toString();
-            String direction = style == null ? NarrationSettings.DEFAULT_STYLE : style.getText().toString();
-            settings.save(selected, direction);
-            if (apiKey != null) { apiKey.setText(""); apiKey.setHint(secrets.hasApiKey() ? "API key saved securely — leave blank to keep" : "Paste Gemini API key"); }
-            if (toast) Toast.makeText(activity, "Narration settings saved", Toast.LENGTH_SHORT).show();
-            return true;
-        } catch (Exception e) {
-            Toast.makeText(activity, "Unable to save API key securely", Toast.LENGTH_LONG).show();
-            return false;
-        }
     }
 
     private void savePlaybackSettings() {
@@ -478,26 +523,33 @@ final class NarrationUi {
 
     private File audioFile(int index) {
         try {
-            ChapterInput c = book.chapters.get(index);
-            return cache.fileFor(book.bookId, index, c.text, settings.voice(), settings.style());
-        } catch (Exception e) { return null; }
+            ChapterInput chapter = book.chapters.get(index);
+            return cache.fileFor(book.bookId, index, chapter.text, settings.voice(), settings.style());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String cacheStatus() {
-        long bytes = cache.totalBytes();
-        int ready = 0, followReady = 0;
+        int ready = 0;
+        int follow = 0;
         for (int i = 0; i < book.chapters.size(); i++) {
             File audio = audioFile(i);
             if (cache.isReady(audio)) ready++;
-            if (cache.hasFollowData(audio)) followReady++;
+            if (cache.hasFollowData(audio)) follow++;
         }
-        return ready + "/" + book.chapters.size() + " chapters offline • " + followReady + " Follow Text ready • " + humanBytes(bytes);
+        return settings.engineLabel() + " • " + ready + " of " + book.chapters.size() + " chapters ready • " + follow + " Follow Text ready • " + humanBytes(cache.totalBytes());
     }
 
     private void requestNotifications() {
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 4102);
         }
+    }
+
+    private int findEngine(String mode) {
+        for (int i = 0; i < ENGINE_VALUES.length; i++) if (ENGINE_VALUES[i].equals(mode)) return i;
+        return 0;
     }
 
     private int findVoice(String selected) {
@@ -512,10 +564,14 @@ final class NarrationUi {
     }
 
     private int findSpeed(float selected) {
-        int best = 0; float delta = Float.MAX_VALUE;
+        int best = 0;
+        float delta = Float.MAX_VALUE;
         for (int i = 0; i < SPEED_VALUES.length; i++) {
             float d = Math.abs(SPEED_VALUES[i] - selected);
-            if (d < delta) { delta = d; best = i; }
+            if (d < delta) {
+                delta = d;
+                best = i;
+            }
         }
         return best;
     }
@@ -526,63 +582,133 @@ final class NarrationUi {
     }
 
     private LinearLayout column() {
-        LinearLayout v = new LinearLayout(activity); v.setOrientation(LinearLayout.VERTICAL); v.setBackgroundColor(Color.rgb(247, 244, 237)); return v;
+        LinearLayout layout = new LinearLayout(activity);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(Color.rgb(247, 244, 237));
+        return layout;
     }
 
-    private LinearLayout columnTransparent() {
-        LinearLayout v = new LinearLayout(activity); v.setOrientation(LinearLayout.VERTICAL); return v;
+    private LinearLayout transparentColumn() {
+        LinearLayout layout = new LinearLayout(activity);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        return layout;
     }
 
     private LinearLayout card() {
-        LinearLayout v = new LinearLayout(activity); v.setOrientation(LinearLayout.VERTICAL); v.setPadding(dp(17), dp(17), dp(17), dp(17));
-        GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.rgb(255, 253, 249)); bg.setCornerRadius(dp(22)); bg.setStroke(dp(1), Color.rgb(226, 219, 206));
-        v.setBackground(bg); v.setElevation(dp(1)); return v;
+        LinearLayout layout = new LinearLayout(activity);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(16), dp(16), dp(16), dp(16));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(255, 253, 249));
+        background.setCornerRadius(dp(18));
+        background.setStroke(dp(1), Color.rgb(226, 219, 206));
+        layout.setBackground(background);
+        return layout;
     }
 
-    private Button button(String value) {
-        Button b = new Button(activity); b.setText(value); b.setAllCaps(false); b.setTextSize(13); b.setTextColor(Color.WHITE);
-        GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.rgb(48, 48, 43)); bg.setCornerRadius(dp(18)); b.setBackground(bg); return b;
+    private Button primaryButton(String value) {
+        Button button = new Button(activity);
+        button.setText(value);
+        button.setAllCaps(false);
+        button.setTextSize(15);
+        button.setTextColor(Color.WHITE);
+        button.setMinHeight(dp(56));
+        button.setContentDescription(value);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(48, 48, 43));
+        background.setCornerRadius(dp(16));
+        button.setBackground(background);
+        return button;
     }
 
     private Button secondaryButton(String value) {
-        Button b = new Button(activity); b.setText(value); b.setAllCaps(false); b.setTextSize(12); b.setTextColor(Color.rgb(48, 48, 43));
-        GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.rgb(239, 234, 224)); bg.setCornerRadius(dp(18)); b.setBackground(bg); return b;
+        Button button = new Button(activity);
+        button.setText(value);
+        button.setAllCaps(false);
+        button.setTextSize(14);
+        button.setTextColor(Color.rgb(48, 48, 43));
+        button.setMinHeight(dp(52));
+        button.setContentDescription(value);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(239, 234, 224));
+        background.setCornerRadius(dp(15));
+        button.setBackground(background);
+        return button;
+    }
+
+    private LinearLayout.LayoutParams fullButton() {
+        return new LinearLayout.LayoutParams(-1, -2);
+    }
+
+    private TextView heading(String value, float size) {
+        TextView view = text(value, size, Color.rgb(24, 27, 29), true);
+        if (Build.VERSION.SDK_INT >= 28) view.setAccessibilityHeading(true);
+        return view;
     }
 
     private TextView text(String value, float size, int color, boolean bold) {
-        TextView v = new TextView(activity); v.setText(value); v.setTextSize(size); v.setTextColor(color); if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return v;
+        TextView view = new TextView(activity);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setGravity(Gravity.START);
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return view;
     }
 
-    private Bitmap bitmap(byte[] data) { try { return data == null ? null : BitmapFactory.decodeByteArray(data, 0, data.length); } catch (Exception e) { return null; } }
-    private int dp(float value) { return Math.round(value * activity.getResources().getDisplayMetrics().density); }
-    private static String humanBytes(long bytes) { if (bytes < 1024 * 1024) return Math.max(0, bytes / 1024) + " KB"; return String.format(Locale.US, "%.1f MB", bytes / 1048576.0); }
+    private Bitmap bitmap(byte[] data) {
+        try { return data == null ? null : BitmapFactory.decodeByteArray(data, 0, data.length); }
+        catch (Exception e) { return null; }
+    }
+
+    private int dp(float value) {
+        return Math.round(value * activity.getResources().getDisplayMetrics().density);
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes < 1024 * 1024) return Math.max(0, bytes / 1024) + " KB";
+        return String.format(Locale.US, "%.1f MB", bytes / 1048576.0);
+    }
 
     private static String friendlyError(Exception e) {
         String raw = e == null || e.getMessage() == null ? "" : e.getMessage();
         String value = raw.toLowerCase(Locale.US);
-        if (value.contains("401") || value.contains("403") || value.contains("api key") && (value.contains("invalid") || value.contains("denied")))
-            return "Gemini API key is invalid or not allowed for this request. Check the key and try Test + preview again.";
-        if (value.contains("429") || value.contains("quota") || value.contains("resource_exhausted"))
-            return "Gemini quota or rate limit was reached. Wait a little or check the Gemini project quota, then retry.";
-        if (value.contains("timeout") || value.contains("timed out") || value.contains("unable to resolve") || value.contains("network") || value.contains("connection"))
-            return "Network connection to Gemini failed. Check internet access and try again.";
-        return raw.trim().isEmpty() ? "Narration generation failed" : raw;
+        if (value.contains("401") || value.contains("403") || value.contains("invalid") && value.contains("key"))
+            return "Gemini API key is invalid or not allowed. You can also use the free offline Burmese voice.";
+        if (value.contains("429") || value.contains("quota") || value.contains("rate limit"))
+            return "Gemini quota or rate limit was reached. Offline Burmese voice does not use Gemini quota.";
+        if (value.contains("espeak") || value.contains("offline burmese"))
+            return raw.isEmpty() ? "Offline Burmese voice needs attention" : raw;
+        return raw.trim().isEmpty() ? "Voice preview failed" : raw;
     }
 
     static final class BookInput {
-        final String bookId, title, author;
+        final String bookId;
+        final String title;
+        final String author;
         final byte[] cover;
         final List<ChapterInput> chapters;
+
         BookInput(String bookId, String title, String author, byte[] cover, List<ChapterInput> chapters) {
-            this.bookId = bookId; this.title = title; this.author = author; this.cover = cover; this.chapters = chapters;
+            this.bookId = bookId;
+            this.title = title;
+            this.author = author;
+            this.cover = cover;
+            this.chapters = chapters == null ? new ArrayList<>() : chapters;
         }
+
         BookInput(String bookId, String title, String author, List<ChapterInput> chapters) {
             this(bookId, title, author, null, chapters);
         }
     }
 
     static final class ChapterInput {
-        final String title, text;
-        ChapterInput(String title, String text) { this.title = title; this.text = text; }
+        final String title;
+        final String text;
+
+        ChapterInput(String title, String text) {
+            this.title = title == null ? "Chapter" : title;
+            this.text = text == null ? "" : text;
+        }
     }
 }
