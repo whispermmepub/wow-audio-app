@@ -9,29 +9,48 @@ import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
+import android.media.PlaybackParams;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import java.io.File;
+import java.util.ArrayList;
 
 public class PlaybackService extends Service {
     static final String ACTION_PLAY_FILE = "com.whisper.wowaudio.PLAY_FILE";
+    static final String ACTION_PLAY_QUEUE = "com.whisper.wowaudio.PLAY_QUEUE";
     static final String ACTION_TOGGLE = "com.whisper.wowaudio.TOGGLE";
     static final String ACTION_BACK = "com.whisper.wowaudio.BACK_15";
     static final String ACTION_FORWARD = "com.whisper.wowaudio.FORWARD_15";
+    static final String ACTION_NEXT = "com.whisper.wowaudio.NEXT";
+    static final String ACTION_PREVIOUS = "com.whisper.wowaudio.PREVIOUS";
+    static final String ACTION_SET_SPEED = "com.whisper.wowaudio.SET_SPEED";
+    static final String ACTION_SLEEP_TIMER = "com.whisper.wowaudio.SLEEP_TIMER";
     static final String ACTION_STOP = "com.whisper.wowaudio.STOP";
     static final String EXTRA_PATH = "path";
     static final String EXTRA_TITLE = "title";
     static final String EXTRA_AUTHOR = "author";
+    static final String EXTRA_PATHS = "paths";
+    static final String EXTRA_TITLES = "titles";
+    static final String EXTRA_SPEED = "speed";
+    static final String EXTRA_MINUTES = "minutes";
     private static final String CHANNEL = "wow_audio_playback";
     private static final int NOTIFICATION_ID = 4101;
 
     private MediaPlayer player;
     private MediaSession session;
+    private final ArrayList<String> queuePaths = new ArrayList<>();
+    private final ArrayList<String> queueTitles = new ArrayList<>();
+    private int queueIndex;
     private String title = "WoW Audio";
     private String author = "";
+    private float speed = 1f;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private Runnable sleepStop;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -42,8 +61,13 @@ public class PlaybackService extends Service {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build());
         player.setOnCompletionListener(mp -> {
-            updateState(PlaybackState.STATE_STOPPED);
-            stopForeground(false);
+            if (queueIndex + 1 < queuePaths.size()) {
+                queueIndex++;
+                try { playCurrent(); } catch (Exception ignored) { stopPlayback(); }
+            } else {
+                updateState(PlaybackState.STATE_STOPPED);
+                stopForeground(false);
+            }
         });
         session = new MediaSession(this, "WoWAudioPlayback");
         session.setCallback(new MediaSession.Callback() {
@@ -53,6 +77,8 @@ public class PlaybackService extends Service {
             @Override public void onSeekTo(long pos) { seek((int) pos); }
             @Override public void onRewind() { jump(-15000); }
             @Override public void onFastForward() { jump(15000); }
+            @Override public void onSkipToNext() { next(); }
+            @Override public void onSkipToPrevious() { previous(); }
         });
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         session.setActive(true);
@@ -63,14 +89,28 @@ public class PlaybackService extends Service {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
         try {
-            if (ACTION_PLAY_FILE.equals(action)) {
-                playFile(intent.getStringExtra(EXTRA_PATH), intent.getStringExtra(EXTRA_TITLE), intent.getStringExtra(EXTRA_AUTHOR));
+            if (ACTION_PLAY_QUEUE.equals(action)) {
+                ArrayList<String> paths = intent.getStringArrayListExtra(EXTRA_PATHS);
+                ArrayList<String> titles = intent.getStringArrayListExtra(EXTRA_TITLES);
+                playQueue(paths, titles, intent.getStringExtra(EXTRA_AUTHOR));
+            } else if (ACTION_PLAY_FILE.equals(action)) {
+                ArrayList<String> paths = new ArrayList<>(); paths.add(intent.getStringExtra(EXTRA_PATH));
+                ArrayList<String> titles = new ArrayList<>(); titles.add(intent.getStringExtra(EXTRA_TITLE));
+                playQueue(paths, titles, intent.getStringExtra(EXTRA_AUTHOR));
             } else if (ACTION_TOGGLE.equals(action)) {
                 if (player.isPlaying()) pause(); else resume();
             } else if (ACTION_BACK.equals(action)) {
                 jump(-15000);
             } else if (ACTION_FORWARD.equals(action)) {
                 jump(15000);
+            } else if (ACTION_NEXT.equals(action)) {
+                next();
+            } else if (ACTION_PREVIOUS.equals(action)) {
+                previous();
+            } else if (ACTION_SET_SPEED.equals(action)) {
+                setSpeed(intent.getFloatExtra(EXTRA_SPEED, 1f));
+            } else if (ACTION_SLEEP_TIMER.equals(action)) {
+                setSleepTimer(intent.getIntExtra(EXTRA_MINUTES, 0));
             } else if (ACTION_STOP.equals(action)) {
                 stopPlayback();
             }
@@ -78,20 +118,32 @@ public class PlaybackService extends Service {
         return START_NOT_STICKY;
     }
 
-    private void playFile(String path, String newTitle, String newAuthor) throws Exception {
-        if (path == null || !new File(path).isFile()) return;
-        title = empty(newTitle) ? "WoW Audio" : newTitle;
+    private void playQueue(ArrayList<String> paths, ArrayList<String> titles, String newAuthor) throws Exception {
+        queuePaths.clear(); queueTitles.clear();
+        if (paths != null) for (String path : paths) if (path != null && new File(path).isFile()) queuePaths.add(path);
+        if (titles != null) queueTitles.addAll(titles);
+        if (queuePaths.isEmpty()) return;
         author = empty(newAuthor) ? "" : newAuthor;
+        queueIndex = 0;
+        playCurrent();
+    }
+
+    private void playCurrent() throws Exception {
+        if (queueIndex < 0 || queueIndex >= queuePaths.size()) return;
+        String path = queuePaths.get(queueIndex);
+        title = queueIndex < queueTitles.size() && !empty(queueTitles.get(queueIndex)) ? queueTitles.get(queueIndex) : "WoW Audio";
         player.reset();
         player.setDataSource(path);
         player.prepare();
+        applySpeed();
         player.start();
-        MediaMetadata metadata = new MediaMetadata.Builder()
+        session.setMetadata(new MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, author)
+                .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, queueIndex + 1L)
+                .putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, queuePaths.size())
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, player.getDuration())
-                .build();
-        session.setMetadata(metadata);
+                .build());
         updateState(PlaybackState.STATE_PLAYING);
         startForeground(NOTIFICATION_ID, notification());
     }
@@ -99,6 +151,7 @@ public class PlaybackService extends Service {
     private void resume() {
         if (player == null) return;
         try {
+            applySpeed();
             player.start();
             updateState(PlaybackState.STATE_PLAYING);
             startForeground(NOTIFICATION_ID, notification());
@@ -114,8 +167,51 @@ public class PlaybackService extends Service {
         } catch (Exception ignored) { }
     }
 
+    private void next() {
+        if (queueIndex + 1 >= queuePaths.size()) return;
+        queueIndex++;
+        try { playCurrent(); } catch (Exception ignored) { }
+    }
+
+    private void previous() {
+        if (player != null) {
+            try {
+                if (player.getCurrentPosition() > 5000) { seek(0); return; }
+            } catch (Exception ignored) { }
+        }
+        if (queueIndex <= 0) { seek(0); return; }
+        queueIndex--;
+        try { playCurrent(); } catch (Exception ignored) { }
+    }
+
+    private void setSpeed(float value) {
+        speed = Math.max(0.6f, Math.min(2f, value));
+        applySpeed();
+        notifyNow();
+    }
+
+    private void applySpeed() {
+        if (Build.VERSION.SDK_INT < 23 || player == null) return;
+        try {
+            PlaybackParams params = player.getPlaybackParams();
+            params.setSpeed(speed);
+            player.setPlaybackParams(params);
+        } catch (Exception ignored) { }
+    }
+
+    private void setSleepTimer(int minutes) {
+        if (sleepStop != null) handler.removeCallbacks(sleepStop);
+        sleepStop = null;
+        if (minutes <= 0) return;
+        sleepStop = this::stopPlayback;
+        handler.postDelayed(sleepStop, minutes * 60_000L);
+    }
+
     private void stopPlayback() {
+        if (sleepStop != null) handler.removeCallbacks(sleepStop);
+        sleepStop = null;
         try { if (player != null) player.stop(); } catch (Exception ignored) { }
+        queuePaths.clear(); queueTitles.clear();
         updateState(PlaybackState.STATE_STOPPED);
         stopForeground(true);
         stopSelf();
@@ -140,10 +236,11 @@ public class PlaybackService extends Service {
         long pos = 0;
         try { if (player != null) pos = player.getCurrentPosition(); } catch (Exception ignored) { }
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE |
-                PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_REWIND | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_STOP;
+                PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_REWIND | PlaybackState.ACTION_FAST_FORWARD |
+                PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_STOP;
         session.setPlaybackState(new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, pos, state == PlaybackState.STATE_PLAYING ? 1f : 0f)
+                .setState(state, pos, state == PlaybackState.STATE_PLAYING ? speed : 0f)
                 .build());
     }
 
@@ -158,7 +255,7 @@ public class PlaybackService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle(title)
-                .setContentText(author)
+                .setContentText(author + (queuePaths.size() > 1 ? " • " + (queueIndex + 1) + "/" + queuePaths.size() : ""))
                 .setContentIntent(content)
                 .setOngoing(playing)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -193,6 +290,7 @@ public class PlaybackService extends Service {
     }
 
     @Override public void onDestroy() {
+        if (sleepStop != null) handler.removeCallbacks(sleepStop);
         if (session != null) { session.setActive(false); session.release(); }
         if (player != null) { try { player.release(); } catch (Exception ignored) { } }
         super.onDestroy();
