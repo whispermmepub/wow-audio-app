@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 final class AudioCache {
+    private static final String CACHE_VERSION = "v2-normalized-follow";
     private final File root;
 
     AudioCache(Context context) {
@@ -15,7 +16,7 @@ final class AudioCache {
     }
 
     File fileFor(String bookId, int chapterIndex, String text, String voice, String style) throws Exception {
-        String material = safe(bookId) + "\n" + chapterIndex + "\n" + safe(voice) + "\n" + safe(style) + "\n" + safe(text);
+        String material = CACHE_VERSION + "\n" + safe(bookId) + "\n" + chapterIndex + "\n" + safe(voice) + "\n" + safe(style) + "\n" + safe(text);
         String hash = sha256(material);
         File bookDir = new File(root, sha256(safe(bookId)).substring(0, 16));
         if (!bookDir.exists()) bookDir.mkdirs();
@@ -23,6 +24,8 @@ final class AudioCache {
     }
 
     boolean isReady(File file) { return file != null && file.isFile() && file.length() > 44; }
+
+    boolean hasFollowData(File file) { return isReady(file) && AudioTimingStore.sidecar(file).isFile(); }
 
     long totalBytes() { return size(root); }
 
