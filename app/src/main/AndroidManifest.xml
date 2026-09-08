@@ -45,8 +45,13 @@
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
+        </activity>
 
-            <!-- Share EPUB files into WoW Audio. Some providers report generic MIME types. -->
+        <!-- Dedicated share receiver normalizes provider-specific SEND/SEND_MULTIPLE payloads. -->
+        <activity
+            android:name=".ShareImportActivity"
+            android:exported="true"
+            android:noHistory="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
