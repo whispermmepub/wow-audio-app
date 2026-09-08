@@ -27,9 +27,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 final class NarrationUi {
     private static final String[] VOICES = {
-            "Achernar", "Kore", "Aoede", "Gacrux", "Sulafat", "Iapetus", "Schedar", "Charon",
-            "Zephyr", "Puck", "Leda", "Orus", "Callirrhoe", "Autonoe", "Despina", "Erinome",
-            "Algieba", "Rasalgethi", "Umbriel", "Algenib", "Alnilam", "Achird", "Vindemiatrix"
+            "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
+            "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+            "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+    };
+    private static final String[] STYLE_LABELS = {"Natural", "Warm", "Calm", "Storyteller", "Dramatic", "Soft", "Bedtime", "Custom"};
+    private static final String[] STYLE_PROMPTS = {
+            NarrationSettings.DEFAULT_STYLE,
+            "Narrate warmly and naturally like a caring professional audiobook reader. Preserve the original Burmese or English text exactly. Use inviting tone, clear pronunciation, gentle emphasis, and natural pauses.",
+            "Narrate in a calm, steady, composed audiobook voice. Preserve the original text exactly. Use clear pronunciation, relaxed pacing, smooth phrasing, and unhurried natural pauses.",
+            "Narrate as an engaging professional storyteller. Preserve the original text exactly. Give characters and narrative turns tasteful expression while keeping pronunciation clear and pacing natural.",
+            "Narrate with cinematic dramatic energy appropriate to the text, without overacting. Preserve the original text exactly. Use purposeful emphasis, tension, release, and clear natural pauses.",
+            "Narrate softly and gently with a close, intimate audiobook tone. Preserve the original text exactly. Keep pronunciation clear, volume impression soft, pacing smooth, and pauses natural.",
+            "Narrate in a quiet, soothing bedtime-story style. Preserve the original text exactly. Use a gentle low-energy delivery, slightly slower pacing, soft expression, and restful pauses.",
+            ""
     };
     private static final String[] SPEED_LABELS = {"0.8×", "1.0×", "1.25×", "1.5×", "1.75×", "2.0×"};
     private static final float[] SPEED_VALUES = {0.8f, 1f, 1.25f, 1.5f, 1.75f, 2f};
@@ -47,6 +58,7 @@ final class NarrationUi {
     private EditText apiKey;
     private EditText style;
     private Spinner voice;
+    private Spinner stylePreset;
     private Spinner speed;
     private Spinner sleep;
     private TextView status;
@@ -107,6 +119,18 @@ final class NarrationUi {
         voice.setSelection(findVoice(settings.voice()));
         setup.addView(voice, new LinearLayout.LayoutParams(-1, -2));
 
+        TextView presetLabel = text("Style preset", 14, Color.rgb(35, 36, 36), true);
+        presetLabel.setPadding(0, dp(14), 0, dp(4));
+        setup.addView(presetLabel);
+        stylePreset = new Spinner(activity);
+        stylePreset.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, STYLE_LABELS));
+        stylePreset.setSelection(findStylePreset(settings.style()));
+        setup.addView(stylePreset, new LinearLayout.LayoutParams(-1, -2));
+
+        Button usePreset = secondaryButton("Use selected style");
+        LinearLayout.LayoutParams upp = new LinearLayout.LayoutParams(-1, -2); upp.topMargin = dp(6);
+        setup.addView(usePreset, upp);
+
         TextView slabel = text("Narration direction", 14, Color.rgb(35, 36, 36), true);
         slabel.setPadding(0, dp(14), 0, dp(4));
         setup.addView(slabel);
@@ -116,6 +140,14 @@ final class NarrationUi {
         style.setMinLines(3);
         style.setGravity(Gravity.TOP | Gravity.START);
         setup.addView(style, new LinearLayout.LayoutParams(-1, -2));
+        usePreset.setOnClickListener(v -> {
+            int index = stylePreset.getSelectedItemPosition();
+            if (index >= 0 && index < STYLE_PROMPTS.length && !STYLE_PROMPTS[index].isEmpty()) style.setText(STYLE_PROMPTS[index]);
+            if (index == STYLE_PROMPTS.length - 1) {
+                style.requestFocus();
+                Toast.makeText(activity, "Edit the narration direction for your custom style", Toast.LENGTH_SHORT).show();
+            }
+        });
 
         Button save = button("Save narration settings");
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = dp(14);
@@ -331,7 +363,14 @@ final class NarrationUi {
 
     private int findVoice(String selected) {
         for (int i = 0; i < VOICES.length; i++) if (VOICES[i].equalsIgnoreCase(selected)) return i;
-        return 0;
+        return findVoice(NarrationSettings.DEFAULT_VOICE);
+    }
+
+    private int findStylePreset(String selected) {
+        if (selected != null) {
+            for (int i = 0; i < STYLE_PROMPTS.length - 1; i++) if (selected.trim().equals(STYLE_PROMPTS[i])) return i;
+        }
+        return STYLE_LABELS.length - 1;
     }
 
     private int findSpeed(float selected) {
