@@ -14,7 +14,12 @@ import java.util.Map;
 
 final class BookIndex {
     private final File file;
-    BookIndex(Context context) { file = new File(context.getFilesDir(), "library-index.json"); }
+    private final Context context;
+
+    BookIndex(Context context) {
+        this.context = context.getApplicationContext();
+        file = new File(this.context.getFilesDir(), "library-index.json");
+    }
 
     synchronized Map<String, Entry> load() {
         Map<String, Entry> result = new HashMap<>();
@@ -37,6 +42,7 @@ final class BookIndex {
         Map<String, Entry> entries = load();
         entries.put(entry.fileName, entry);
         JSONArray a = new JSONArray();
+        boolean committed = false;
         try {
             for (Entry e : entries.values()) {
                 JSONObject o = new JSONObject();
@@ -44,10 +50,19 @@ final class BookIndex {
                 a.put(o);
             }
             File temp = new File(file.getParentFile(), file.getName() + ".tmp");
-            try (FileOutputStream out = new FileOutputStream(temp)) { out.write(a.toString().getBytes(StandardCharsets.UTF_8)); out.getFD().sync(); }
+            try (FileOutputStream out = new FileOutputStream(temp)) {
+                out.write(a.toString().getBytes(StandardCharsets.UTF_8));
+                out.getFD().sync();
+            }
             if (file.exists() && !file.delete()) throw new Exception("Unable to replace index");
             if (!temp.renameTo(file)) throw new Exception("Unable to commit index");
+            committed = true;
         } catch (Exception ignored) { }
+
+        if (committed && new SecretStore(context).hasApiKey()) {
+            try { NarrationGenerationService.enqueue(context, entry.fileName); }
+            catch (Exception ignored) { }
+        }
     }
 
     static final class Entry {

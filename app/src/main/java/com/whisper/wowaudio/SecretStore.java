@@ -6,6 +6,7 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
 
+import java.io.File;
 import java.security.KeyStore;
 
 import javax.crypto.Cipher;
@@ -18,9 +19,11 @@ final class SecretStore {
     private static final String VALUE = "gemini_api_key";
     private static final String ALIAS = "wow_audio_gemini_key";
     private final SharedPreferences prefs;
+    private final Context context;
 
     SecretStore(Context context) {
-        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this.context = context.getApplicationContext();
+        prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
     void setApiKey(String apiKey) throws Exception {
@@ -33,6 +36,7 @@ final class SecretStore {
         byte[] encrypted = cipher.doFinal(apiKey.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         String packed = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP);
         prefs.edit().putString(VALUE, packed).apply();
+        enqueueExistingBooks();
     }
 
     String getApiKey() {
@@ -52,6 +56,17 @@ final class SecretStore {
     }
 
     boolean hasApiKey() { return !getApiKey().isEmpty(); }
+
+    private void enqueueExistingBooks() {
+        File library = new File(context.getFilesDir(), "library");
+        File[] files = library.listFiles();
+        if (files == null) return;
+        for (File file : files) {
+            if (!file.isFile() || !file.getName().toLowerCase(java.util.Locale.US).endsWith(".epub")) continue;
+            try { NarrationGenerationService.enqueue(context, file.getName()); }
+            catch (Exception ignored) { }
+        }
+    }
 
     private SecretKey key() throws Exception {
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");
