@@ -61,6 +61,7 @@ jobs:
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
           grep -q "versionCode 6" app/build.gradle
           grep -q "versionName '1.2.0'" app/build.gradle
+          grep -q "androidx.work:work-runtime" app/build.gradle
           grep -q "com.whisper.wowaudio.action.OPEN_BOOK" app/src/main/AndroidManifest.xml
           grep -q "application/epub+zip" app/src/main/AndroidManifest.xml
           grep -q "application/pdf" app/src/main/AndroidManifest.xml
@@ -71,7 +72,12 @@ jobs:
           grep -q "WAKE_LOCK" app/src/main/AndroidManifest.xml
           grep -q "BOOT_COMPLETED" app/src/main/AndroidManifest.xml
           grep -q "GenerationQueueStore" app/src/main/java/com/whisper/wowaudio/NarrationGenerationService.java
-          grep -q "isCurrentRevision" app/src/main/java/com/whisper/wowaudio/NarrationGenerationService.java
+          grep -q "isCurrentRevision" app/src/main/java/com/whisper/wowaudio/NarrationGenerationEngine.java
+          grep -q "ENGINE_LOCK" app/src/main/java/com/whisper/wowaudio/NarrationGenerationEngine.java
+          grep -q "NarrationRecoveryWorker" app/src/main/java/com/whisper/wowaudio/NarrationWorkScheduler.java
+          grep -q "APPEND_OR_REPLACE" app/src/main/java/com/whisper/wowaudio/NarrationWorkScheduler.java
+          grep -q "NarrationWorkScheduler.schedule" app/src/main/java/com/whisper/wowaudio/GenerationBootReceiver.java
+          ! grep -q "NarrationGenerationService.resumePending" app/src/main/java/com/whisper/wowaudio/GenerationBootReceiver.java
           grep -q "streamingPcm16Mono" app/src/main/java/com/whisper/wowaudio/GeminiTtsClient.java
           grep -q "Preparing automatically" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           grep -q "setAccessibilityHeading" app/src/main/java/com/whisper/wowaudio/MainActivity.java
