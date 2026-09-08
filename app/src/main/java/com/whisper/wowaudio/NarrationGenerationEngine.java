@@ -4,8 +4,11 @@ import android.content.Context;
 
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 final class NarrationGenerationEngine {
+    private static final ReentrantLock ENGINE_LOCK = new ReentrantLock();
+
     interface Listener {
         void onStatus(String title, String text, int progress, int max, boolean ongoing);
         default boolean isCancelled() { return false; }
@@ -26,6 +29,17 @@ final class NarrationGenerationEngine {
     private NarrationGenerationEngine() { }
 
     static Result runOne(Context context, Listener listener) {
+        if (!ENGINE_LOCK.tryLock()) {
+            return Result.waiting(System.currentTimeMillis() + 30_000L);
+        }
+        try {
+            return runOneLocked(context, listener);
+        } finally {
+            ENGINE_LOCK.unlock();
+        }
+    }
+
+    private static Result runOneLocked(Context context, Listener listener) {
         Context app = context.getApplicationContext();
         GenerationQueueStore queue = new GenerationQueueStore(app);
         long now = System.currentTimeMillis();
