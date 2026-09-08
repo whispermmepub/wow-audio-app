@@ -18,6 +18,22 @@ final class NarrationWorkScheduler {
     private NarrationWorkScheduler() { }
 
     static void schedule(Context context, long delayMs) {
+        enqueue(context, delayMs, ExistingWorkPolicy.REPLACE);
+    }
+
+    static void scheduleAt(Context context, long whenMs) {
+        schedule(context, Math.max(0L, whenMs - System.currentTimeMillis()));
+    }
+
+    static void continueAfterCurrent(Context context, long delayMs) {
+        enqueue(context, delayMs, ExistingWorkPolicy.APPEND_OR_REPLACE);
+    }
+
+    static void continueAt(Context context, long whenMs) {
+        continueAfterCurrent(context, Math.max(0L, whenMs - System.currentTimeMillis()));
+    }
+
+    private static void enqueue(Context context, long delayMs, ExistingWorkPolicy policy) {
         if (context == null) return;
         Constraints constraints = new Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -29,12 +45,7 @@ final class NarrationWorkScheduler {
                 .addTag(UNIQUE_WORK);
         if (delayMs > 0) builder.setInitialDelay(delayMs, TimeUnit.MILLISECONDS);
         WorkManager.getInstance(context.getApplicationContext())
-                .enqueueUniqueWork(UNIQUE_WORK, ExistingWorkPolicy.REPLACE, builder.build());
-    }
-
-    static void scheduleAt(Context context, long whenMs) {
-        long delay = Math.max(0L, whenMs - System.currentTimeMillis());
-        schedule(context, delay);
+                .enqueueUniqueWork(UNIQUE_WORK, policy, builder.build());
     }
 
     static void cancel(Context context) {
