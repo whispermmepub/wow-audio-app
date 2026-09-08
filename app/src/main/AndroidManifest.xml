@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
+        android:name=".WoWAudioApplication"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -24,7 +25,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Stable WoW Reader -> WoW Audio contract. -->
             <intent-filter>
                 <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -32,13 +32,11 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
-            <!-- Fallback for Reader builds/providers that omit MIME type. -->
             <intent-filter>
                 <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            <!-- Standalone Open with from Files / Downloads / Telegram. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
