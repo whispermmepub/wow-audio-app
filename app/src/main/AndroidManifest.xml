@@ -57,6 +57,10 @@
         </activity>
 
         <activity
+            android:name=".OfflineVoiceSetupActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".ShareImportActivity"
             android:exported="true"
             android:noHistory="true">
