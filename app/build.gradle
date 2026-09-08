@@ -2,6 +2,12 @@ plugins {
     id 'com.android.application'
 }
 
+def updateKeyFile = System.getenv('WOW_AUDIO_KEYSTORE_FILE')
+def updateStorePassword = System.getenv('WOW_AUDIO_STORE_PASSWORD')
+def updateKeyAlias = System.getenv('WOW_AUDIO_KEY_ALIAS')
+def updateKeyPassword = System.getenv('WOW_AUDIO_KEY_PASSWORD')
+def hasUpdateSigning = [updateKeyFile, updateStorePassword, updateKeyAlias, updateKeyPassword].every { it != null && !it.trim().isEmpty() }
+
 android {
     namespace 'com.whisper.wowaudio'
     compileSdk 36
@@ -10,13 +16,28 @@ android {
         applicationId 'com.whisper.wowaudio'
         minSdk 23
         targetSdk 36
-        versionCode 4
-        versionName '1.0.1'
+        versionCode 5
+        versionName '1.1.0'
+    }
+
+    signingConfigs {
+        updateKey {
+            if (hasUpdateSigning) {
+                storeFile file(updateKeyFile)
+                storePassword updateStorePassword
+                keyAlias updateKeyAlias
+                keyPassword updateKeyPassword
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            if (hasUpdateSigning) signingConfig signingConfigs.updateKey
+        }
         release {
             minifyEnabled false
+            if (hasUpdateSigning) signingConfig signingConfigs.updateKey
         }
     }
 
