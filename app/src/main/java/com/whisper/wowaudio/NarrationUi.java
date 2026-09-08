@@ -31,6 +31,10 @@ final class NarrationUi {
             "Zephyr", "Puck", "Leda", "Orus", "Callirrhoe", "Autonoe", "Despina", "Erinome",
             "Algieba", "Rasalgethi", "Umbriel", "Algenib", "Alnilam", "Achird", "Vindemiatrix"
     };
+    private static final String[] SPEED_LABELS = {"0.8×", "1.0×", "1.25×", "1.5×", "1.75×", "2.0×"};
+    private static final float[] SPEED_VALUES = {0.8f, 1f, 1.25f, 1.5f, 1.75f, 2f};
+    private static final String[] SLEEP_LABELS = {"Off", "15 min", "30 min", "45 min", "60 min", "90 min"};
+    private static final int[] SLEEP_VALUES = {0, 15, 30, 45, 60, 90};
 
     private final Activity activity;
     private final BookInput book;
@@ -43,6 +47,8 @@ final class NarrationUi {
     private EditText apiKey;
     private EditText style;
     private Spinner voice;
+    private Spinner speed;
+    private Spinner sleep;
     private TextView status;
 
     NarrationUi(Activity activity, BookInput book, Runnable onBack) {
@@ -78,6 +84,20 @@ final class NarrationUi {
         apiKey.setHint(secrets.hasApiKey() ? "Saved securely — leave blank to keep" : "Paste Gemini API key");
         setup.addView(apiKey, new LinearLayout.LayoutParams(-1, -2));
 
+        Button forget = secondaryButton("Forget saved API key");
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2); fp.topMargin = dp(7);
+        setup.addView(forget, fp);
+        forget.setEnabled(secrets.hasApiKey());
+        forget.setOnClickListener(v -> {
+            try {
+                secrets.setApiKey("");
+                Toast.makeText(activity, "Saved API key removed", Toast.LENGTH_SHORT).show();
+                show();
+            } catch (Exception e) {
+                Toast.makeText(activity, "Unable to remove saved API key", Toast.LENGTH_LONG).show();
+            }
+        });
+
         TextView vlabel = text("Voice", 14, Color.rgb(35, 36, 36), true);
         vlabel.setPadding(0, dp(14), 0, dp(4));
         setup.addView(vlabel);
@@ -102,6 +122,39 @@ final class NarrationUi {
         setup.addView(save, sp);
         save.setOnClickListener(v -> saveSettings(true));
         root.addView(setup);
+
+        LinearLayout playback = card();
+        LinearLayout.LayoutParams playCard = new LinearLayout.LayoutParams(-1, -2); playCard.topMargin = dp(12); playback.setLayoutParams(playCard);
+        playback.addView(text("Playback", 16, Color.rgb(35, 36, 36), true));
+        TextView speedLabel = text("Speed", 13, Color.rgb(92, 90, 85), false);
+        speedLabel.setPadding(0, dp(10), 0, dp(3));
+        playback.addView(speedLabel);
+        speed = new Spinner(activity);
+        speed.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, SPEED_LABELS));
+        speed.setSelection(findSpeed(settings.speed()));
+        playback.addView(speed, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView sleepLabel = text("Sleep timer", 13, Color.rgb(92, 90, 85), false);
+        sleepLabel.setPadding(0, dp(10), 0, dp(3));
+        playback.addView(sleepLabel);
+        sleep = new Spinner(activity);
+        sleep.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, SLEEP_LABELS));
+        sleep.setSelection(findSleep(settings.sleepMinutes()));
+        playback.addView(sleep, new LinearLayout.LayoutParams(-1, -2));
+
+        Button applyPlayback = button("Apply playback settings");
+        LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, -2); ap.topMargin = dp(12);
+        playback.addView(applyPlayback, ap);
+        applyPlayback.setOnClickListener(v -> {
+            savePlaybackSettings();
+            sendPlaybackSettings();
+            Toast.makeText(activity, "Playback settings applied", Toast.LENGTH_SHORT).show();
+        });
+        Button stopPlayback = secondaryButton("Stop playback");
+        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, -2); stp.topMargin = dp(7);
+        playback.addView(stopPlayback, stp);
+        stopPlayback.setOnClickListener(v -> activity.startService(new Intent(activity, PlaybackService.class).setAction(PlaybackService.ACTION_STOP)));
+        root.addView(playback);
 
         status = text(cacheStatus(), 12, Color.rgb(112, 109, 103), false);
         status.setPadding(0, dp(18), 0, dp(10));
@@ -205,6 +258,7 @@ final class NarrationUi {
     }
 
     private void playQueue(int startChapter) {
+        savePlaybackSettings();
         ArrayList<String> paths = new ArrayList<>();
         ArrayList<String> titles = new ArrayList<>();
         for (int i = startChapter; i < book.chapters.size(); i++) {
@@ -219,6 +273,8 @@ final class NarrationUi {
         i.putStringArrayListExtra(PlaybackService.EXTRA_PATHS, paths);
         i.putStringArrayListExtra(PlaybackService.EXTRA_TITLES, titles);
         i.putExtra(PlaybackService.EXTRA_AUTHOR, book.author);
+        i.putExtra(PlaybackService.EXTRA_SPEED, settings.speed());
+        i.putExtra(PlaybackService.EXTRA_MINUTES, settings.sleepMinutes());
         if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(i); else activity.startService(i);
     }
 
@@ -236,6 +292,21 @@ final class NarrationUi {
             Toast.makeText(activity, "Unable to save API key securely", Toast.LENGTH_LONG).show();
             return false;
         }
+    }
+
+    private void savePlaybackSettings() {
+        float selectedSpeed = speed == null ? settings.speed() : SPEED_VALUES[Math.max(0, speed.getSelectedItemPosition())];
+        int selectedSleep = sleep == null ? settings.sleepMinutes() : SLEEP_VALUES[Math.max(0, sleep.getSelectedItemPosition())];
+        settings.savePlayback(selectedSpeed, selectedSleep);
+    }
+
+    private void sendPlaybackSettings() {
+        Intent speedIntent = new Intent(activity, PlaybackService.class).setAction(PlaybackService.ACTION_SET_SPEED);
+        speedIntent.putExtra(PlaybackService.EXTRA_SPEED, settings.speed());
+        activity.startService(speedIntent);
+        Intent timerIntent = new Intent(activity, PlaybackService.class).setAction(PlaybackService.ACTION_SLEEP_TIMER);
+        timerIntent.putExtra(PlaybackService.EXTRA_MINUTES, settings.sleepMinutes());
+        activity.startService(timerIntent);
     }
 
     private File audioFile(int index) {
@@ -260,6 +331,21 @@ final class NarrationUi {
 
     private int findVoice(String selected) {
         for (int i = 0; i < VOICES.length; i++) if (VOICES[i].equalsIgnoreCase(selected)) return i;
+        return 0;
+    }
+
+    private int findSpeed(float selected) {
+        int best = 0;
+        float delta = Float.MAX_VALUE;
+        for (int i = 0; i < SPEED_VALUES.length; i++) {
+            float d = Math.abs(SPEED_VALUES[i] - selected);
+            if (d < delta) { delta = d; best = i; }
+        }
+        return best;
+    }
+
+    private int findSleep(int minutes) {
+        for (int i = 0; i < SLEEP_VALUES.length; i++) if (SLEEP_VALUES[i] == minutes) return i;
         return 0;
     }
 
