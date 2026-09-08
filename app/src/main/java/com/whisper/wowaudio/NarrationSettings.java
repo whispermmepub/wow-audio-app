@@ -41,9 +41,8 @@ final class NarrationSettings {
     }
 
     String effectiveCacheVoice() {
-        return useOfflineEngine()
-                ? OfflineBurmeseTtsClient.ENGINE_ID
-                : "gemini-" + voice();
+        // Keep the original Gemini cache key so v1.2 downloaded books remain reusable.
+        return useOfflineEngine() ? OfflineBurmeseTtsClient.ENGINE_ID : voice();
     }
 
     String engineLabel() {
