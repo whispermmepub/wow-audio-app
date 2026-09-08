@@ -28,6 +28,10 @@ public class NarrationGenerationService extends Service {
     private GenerationQueueStore queue;
     private boolean draining;
     private PowerManager.WakeLock wakeLock;
+    private volatile String activeBookId = "";
+    private volatile long activeRevision;
+    private volatile int activeChapter;
+    private volatile int activeTotal;
 
     static void enqueue(Context context, String bookId) {
         if (context == null || empty(bookId)) return;
@@ -66,7 +70,9 @@ public class NarrationGenerationService extends Service {
         try {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
             else context.startService(intent);
-        } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+            scheduleRetry(context, System.currentTimeMillis() + 15L * 60_000L);
+        }
     }
 
     @Override public void onCreate() {
@@ -90,6 +96,7 @@ public class NarrationGenerationService extends Service {
         executor.execute(() -> {
             try { drainQueue(); }
             finally {
+                clearActive();
                 releaseWakeLock();
                 boolean runAgain;
                 synchronized (NarrationGenerationService.this) {
@@ -158,7 +165,7 @@ public class NarrationGenerationService extends Service {
             for (int i = start; i < total; i++) {
                 if (Thread.currentThread().isInterrupted()) return;
                 if (!queue.isCurrentRevision(book.bookId, job.revision)) return;
-                renewWakeLock();
+
                 NarrationUi.ChapterInput chapter = book.chapters.get(i);
                 File target = cache.fileFor(book.bookId, i, chapter.text, voice, style);
                 int chapterNumber = i + 1;
@@ -171,6 +178,29 @@ public class NarrationGenerationService extends Service {
                     continue;
                 }
 
+                if (!GenerationEnvironment.hasNetwork(this)) {
+                    long retryAt = System.currentTimeMillis() + 2L * 60_000L;
+                    queue.markWaiting(book.bookId, job.revision, i, total, retryAt, "Internet connection unavailable");
+                    scheduleRetry(this, retryAt);
+                    notifyNow(notification(title,
+                            "Internet is offline. Chapter " + chapterNumber + " will continue automatically when WoW Audio retries.",
+                            i, total, false));
+                    return;
+                }
+
+                if (!GenerationEnvironment.hasStorageHeadroom(this)) {
+                    long retryAt = System.currentTimeMillis() + 30L * 60_000L;
+                    String available = GenerationEnvironment.availableStorageText(this);
+                    queue.markWaiting(book.bookId, job.revision, i, total, retryAt, "Low storage: " + available + " free");
+                    scheduleRetry(this, retryAt);
+                    notifyNow(notification(title,
+                            "Storage is low (" + available + " free). Free some space; preparation will retry automatically.",
+                            i, total, false));
+                    return;
+                }
+
+                renewWakeLock();
+                setActive(book.bookId, job.revision, i, total);
                 notifyNow(notification(title,
                         "Preparing chapter " + chapterNumber + " of " + total + ": " + chapter.title,
                         i, total, true));
@@ -222,6 +252,7 @@ public class NarrationGenerationService extends Service {
                             i, total, false));
                     return;
                 } finally {
+                    clearActive();
                     releaseWakeLock();
                 }
             }
@@ -299,6 +330,20 @@ public class NarrationGenerationService extends Service {
         catch (Exception ignored) { }
     }
 
+    private void setActive(String bookId, long revision, int chapter, int total) {
+        activeBookId = bookId == null ? "" : bookId;
+        activeRevision = revision;
+        activeChapter = Math.max(0, chapter);
+        activeTotal = Math.max(0, total);
+    }
+
+    private void clearActive() {
+        activeBookId = "";
+        activeRevision = 0;
+        activeChapter = 0;
+        activeTotal = 0;
+    }
+
     private synchronized void finishServiceIfIdle() {
         if (draining) return;
         stopForeground(false);
@@ -368,7 +413,27 @@ public class NarrationGenerationService extends Service {
 
     private static boolean empty(String value) { return value == null || value.trim().isEmpty(); }
 
+    @Override public void onTimeout(int startId, int fgsType) {
+        String bookId = activeBookId;
+        long revision = activeRevision;
+        int chapter = activeChapter;
+        int total = activeTotal;
+        if (!empty(bookId) && queue != null && queue.isCurrentRevision(bookId, revision)) {
+            long retryAt = System.currentTimeMillis() + 6L * 60L * 60_000L;
+            queue.markWaiting(bookId, revision, chapter, total, retryAt, "Android background-processing time limit");
+            scheduleRetry(this, retryAt);
+            notifyNow(notification("WoW Audio",
+                    "Android paused a very long audiobook preparation session. Progress is saved and will resume automatically later.",
+                    chapter, total, false));
+        }
+        releaseWakeLock();
+        executor.shutdownNow();
+        stopForeground(true);
+        stopSelf(startId);
+    }
+
     @Override public void onDestroy() {
+        clearActive();
         releaseWakeLock();
         executor.shutdownNow();
         super.onDestroy();
