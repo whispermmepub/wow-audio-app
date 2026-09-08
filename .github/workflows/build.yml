@@ -73,12 +73,15 @@ jobs:
           grep -q "BOOT_COMPLETED" app/src/main/AndroidManifest.xml
           grep -q "com.reecedunn.espeak" app/src/main/AndroidManifest.xml
           grep -q "android.intent.action.TTS_SERVICE" app/src/main/AndroidManifest.xml
+          grep -q "OfflineVoiceSetupActivity" app/src/main/AndroidManifest.xml
           grep -q "OfflineBurmeseTtsClient" app/src/main/java/com/whisper/wowaudio/NarrationGenerationEngine.java
           grep -q "synthesizeToFile" app/src/main/java/com/whisper/wowaudio/OfflineBurmeseTtsClient.java
           grep -q "new Locale(\"my\", \"MM\")" app/src/main/java/com/whisper/wowaudio/OfflineBurmeseTtsClient.java
           grep -q "effectiveCacheVoice" app/src/main/java/com/whisper/wowaudio/NarrationSettings.java
           grep -q "NetworkType.NOT_REQUIRED" app/src/main/java/com/whisper/wowaudio/NarrationWorkScheduler.java
-          grep -q "narrationAvailable" app/src/main/java/com/whisper/wowaudio/BookIndex.java
+          grep -q "NarrationGenerationService.enqueue" app/src/main/java/com/whisper/wowaudio/BookIndex.java
+          grep -q "narrationAvailable" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "ENGINE_LABELS" app/src/main/java/com/whisper/wowaudio/NarrationUi.java
           grep -q "GenerationQueueStore" app/src/main/java/com/whisper/wowaudio/NarrationGenerationService.java
           grep -q "isCurrentRevision" app/src/main/java/com/whisper/wowaudio/NarrationGenerationEngine.java
           grep -q "ENGINE_LOCK" app/src/main/java/com/whisper/wowaudio/NarrationGenerationEngine.java
