@@ -1,6 +1,7 @@
 package com.whisper.wowaudio;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
@@ -74,9 +75,18 @@ public class MainActivity extends Activity {
         if (intent == null) return;
         String action = intent.getAction();
         if (!WOW_OPEN_BOOK.equals(action) && !Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_SEND.equals(action)) return;
-        Uri uri = Intent.ACTION_SEND.equals(action) ? intent.getParcelableExtra(Intent.EXTRA_STREAM) : intent.getData();
+        Uri uri = extractIncomingUri(intent);
         if (uri == null) return;
         importUri(uri, intent.getStringExtra("wow_book_title"), intent.getStringExtra("wow_book_author"), WOW_OPEN_BOOK.equals(action));
+    }
+
+    private Uri extractIncomingUri(Intent intent) {
+        if (!Intent.ACTION_SEND.equals(intent.getAction())) return intent.getData();
+        Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (uri != null) return uri;
+        ClipData clip = intent.getClipData();
+        if (clip != null && clip.getItemCount() > 0) return clip.getItemAt(0).getUri();
+        return intent.getData();
     }
 
     private void launchPicker() {
@@ -122,7 +132,8 @@ public class MainActivity extends Activity {
         File out = uniqueFile(dir, display);
         if (!temp.renameTo(out)) {
             try (InputStream in = new java.io.FileInputStream(temp); FileOutputStream fos = new FileOutputStream(out)) {
-                byte[] buf = new byte[64 * 1024]; int n; while ((n = in.read(buf)) >= 0) fos.write(buf, 0, n);
+                byte[] buf = new byte[64 * 1024]; int n;
+                while ((n = in.read(buf)) >= 0) fos.write(buf, 0, n);
             }
             temp.delete();
         }
@@ -143,7 +154,9 @@ public class MainActivity extends Activity {
     }
 
     private Book parseBook(File file, String suppliedTitle, String suppliedAuthor) throws Exception {
-        Book b = new Book(); b.file = file; b.fileName = file.getName();
+        Book b = new Book();
+        b.file = file;
+        b.fileName = file.getName();
         try (ZipFile zip = new ZipFile(file)) {
             Document container = xml(zip, "META-INF/container.xml");
             NodeList roots = container.getElementsByTagName("rootfile");
@@ -285,11 +298,11 @@ public class MainActivity extends Activity {
         TextView author = text(b.author, 14, Color.rgb(103, 101, 95), false);
         author.setGravity(Gravity.CENTER);
         root.addView(author);
-        Button narrate = button("Set up narration");
+        Button narrate = button("Narration & offline audio");
         LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
         np.topMargin = dp(22);
         root.addView(narrate, np);
-        narrate.setOnClickListener(v -> Toast.makeText(this, "Gemini BYOK narration is the next phase", Toast.LENGTH_SHORT).show());
+        narrate.setOnClickListener(v -> showNarration(b));
         TextView ch = text("Chapters", 18, Color.rgb(24, 27, 29), true);
         ch.setPadding(0, dp(28), 0, dp(8));
         root.addView(ch);
@@ -309,6 +322,13 @@ public class MainActivity extends Activity {
             root.addView(row);
         }
         setContentView(scroll);
+    }
+
+    private void showNarration(Book b) {
+        List<NarrationUi.ChapterInput> chapters = new ArrayList<>();
+        for (Chapter c : b.chapters) chapters.add(new NarrationUi.ChapterInput(c.title, c.text));
+        NarrationUi.BookInput input = new NarrationUi.BookInput(b.fileName, b.title, b.author, chapters);
+        new NarrationUi(this, input, () -> showBookDetail(b)).show();
     }
 
     private Document xml(ZipFile zip, String path) throws Exception {
