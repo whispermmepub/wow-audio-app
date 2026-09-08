@@ -1,5 +1,6 @@
 package com.whisper.wowaudio;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -9,131 +10,312 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 
 import java.io.File;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class NarrationGenerationService extends Service {
-    static final String ACTION_GENERATE_BOOK = "com.whisper.wowaudio.GENERATE_BOOK";
-    static final String EXTRA_BOOK_ID = "book_id";
+    static final String ACTION_DRAIN = "com.whisper.wowaudio.GENERATE_PENDING";
     private static final String CHANNEL = "wow_audio_generation";
     private static final int NOTIFICATION_ID = 4201;
+    private static final int RETRY_REQUEST = 4202;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final Set<String> queued = new HashSet<>();
-    private int pendingJobs;
+    private GenerationQueueStore queue;
+    private boolean draining;
+    private PowerManager.WakeLock wakeLock;
 
     static void enqueue(Context context, String bookId) {
-        if (context == null || bookId == null || bookId.trim().isEmpty()) return;
-        Intent intent = new Intent(context, NarrationGenerationService.class)
-                .setAction(ACTION_GENERATE_BOOK)
-                .putExtra(EXTRA_BOOK_ID, bookId);
-        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
-        else context.startService(intent);
+        if (context == null || empty(bookId)) return;
+        new GenerationQueueStore(context).enqueue(bookId, true);
+        startDrain(context);
+    }
+
+    static void enqueueAllLibrary(Context context) {
+        if (context == null) return;
+        File library = new File(context.getFilesDir(), "library");
+        File[] files = library.listFiles();
+        GenerationQueueStore store = new GenerationQueueStore(context);
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile() && file.getName().toLowerCase(Locale.US).endsWith(".epub")) {
+                    store.enqueue(file.getName(), true);
+                }
+            }
+        }
+        startDrain(context);
+    }
+
+    static void resumePending(Context context) {
+        if (context == null) return;
+        GenerationQueueStore store = new GenerationQueueStore(context);
+        long now = System.currentTimeMillis();
+        if (!store.due(now).isEmpty()) startDrain(context);
+        else {
+            long retry = store.earliestRetryAt();
+            if (retry > now) scheduleRetry(context, retry);
+        }
+    }
+
+    private static void startDrain(Context context) {
+        Intent intent = new Intent(context, NarrationGenerationService.class).setAction(ACTION_DRAIN);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+            else context.startService(intent);
+        } catch (Exception ignored) { }
     }
 
     @Override public void onCreate() {
         super.onCreate();
+        queue = new GenerationQueueStore(this);
         createChannel();
+        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WoWAudio:Generation");
+        wakeLock.setReferenceCounted(false);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        String bookId = intent == null ? null : intent.getStringExtra(EXTRA_BOOK_ID);
-        if (!ACTION_GENERATE_BOOK.equals(intent == null ? null : intent.getAction()) || bookId == null || bookId.trim().isEmpty()) {
-            stopSelf(startId);
-            return START_NOT_STICKY;
-        }
-        startForeground(NOTIFICATION_ID, notification("Preparing audiobook", "Loading book…", 0, 0, true));
-        synchronized (this) {
-            if (queued.contains(bookId)) return START_NOT_STICKY;
-            queued.add(bookId);
-            pendingJobs++;
-        }
-        executor.execute(() -> generate(bookId));
-        return START_REDELIVER_INTENT;
+        startForeground(NOTIFICATION_ID, notification("WoW Audio", "Checking audiobook preparation queue…", 0, 0, true));
+        kickDrain();
+        return START_STICKY;
     }
 
-    private void generate(String bookId) {
-        String bookTitle = "Book";
+    private synchronized void kickDrain() {
+        if (draining) return;
+        draining = true;
+        executor.execute(() -> {
+            try { drainQueue(); }
+            finally {
+                releaseWakeLock();
+                boolean runAgain;
+                synchronized (NarrationGenerationService.this) {
+                    draining = false;
+                    runAgain = queue != null && !queue.due(System.currentTimeMillis()).isEmpty();
+                }
+                if (runAgain) kickDrain();
+                else finishServiceIfIdle();
+            }
+        });
+    }
+
+    private void drainQueue() {
+        while (!Thread.currentThread().isInterrupted()) {
+            List<GenerationQueueStore.Job> due = queue.due(System.currentTimeMillis());
+            if (due.isEmpty()) {
+                long retryAt = queue.earliestRetryAt();
+                if (retryAt > System.currentTimeMillis()) scheduleRetry(this, retryAt);
+                return;
+            }
+            GenerationQueueStore.Job job = due.get(0);
+            processBook(job);
+        }
+    }
+
+    private void processBook(GenerationQueueStore.Job job) {
+        String title = "Book";
+        NarrationUi.BookInput book;
         try {
-            SecretStore secrets = new SecretStore(this);
-            String key = secrets.getApiKey();
-            if (key == null || key.trim().isEmpty()) {
-                notifyNow(notification("Narration setup needed", "Open WoW Audio and add your Gemini API key.", 0, 0, false));
+            File source = new File(new File(getFilesDir(), "library"), job.bookId);
+            if (!source.isFile()) {
+                queue.remove(job.bookId);
                 return;
             }
 
-            NarrationUi.BookInput book = NarrationSourceLoader.load(this, bookId);
-            bookTitle = book.title;
+            SecretStore secrets = new SecretStore(this);
+            String key = secrets.getApiKey();
+            if (empty(key)) {
+                queue.markSetupRequired(job.bookId, job.nextChapter, job.totalChapters);
+                notifyNow(notification("Narration setup needed", "Open WoW Audio once and add your Gemini API key.", 0, 0, false));
+                return;
+            }
+
+            book = NarrationSourceLoader.load(this, job.bookId);
+            title = book.title;
+            int total = book.chapters.size();
+            if (total == 0) {
+                queue.markBlocked(job.bookId, 0, 0, "No readable chapters found");
+                notifyNow(notification(title, "No readable chapters found.", 0, 0, false));
+                return;
+            }
+
             NarrationSettings settings = new NarrationSettings(this);
             AudioCache cache = new AudioCache(this);
             GeminiTtsClient client = new GeminiTtsClient();
-            int total = book.chapters.size();
-            if (total == 0) {
-                notifyNow(notification(bookTitle, "No readable chapters found.", 0, 0, false));
-                return;
-            }
+            int start = Math.max(0, Math.min(job.nextChapter, total - 1));
 
-            for (int i = 0; i < total; i++) {
+            for (int i = start; i < total; i++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                renewWakeLock();
                 NarrationUi.ChapterInput chapter = book.chapters.get(i);
                 File target = cache.fileFor(book.bookId, i, chapter.text, settings.voice(), settings.style());
                 int chapterNumber = i + 1;
+
                 if (cache.isReady(target) && cache.hasFollowData(target)) {
-                    notifyNow(notification(bookTitle,
-                            "Chapter " + chapterNumber + " of " + total + " already ready", chapterNumber, total, true));
+                    queue.markChapterComplete(book.bookId, chapterNumber, total);
+                    notifyNow(notification(title,
+                            "Chapter " + chapterNumber + " of " + total + " already ready",
+                            chapterNumber, total, true));
                     continue;
                 }
-                notifyNow(notification(bookTitle,
+
+                notifyNow(notification(title,
                         "Preparing chapter " + chapterNumber + " of " + total + ": " + chapter.title,
                         i, total, true));
-                final int absoluteChapter = chapterNumber;
-                client.generateToWav(key, chapter.text, settings.voice(), settings.style(), target,
-                        new GeminiTtsClient.Progress() {
-                            @Override public void onChunk(int completed, int chunks) {
-                                notifyNow(notification(book.title,
-                                        "Chapter " + absoluteChapter + " of " + total + " • part " + completed + " of " + chunks,
-                                        absoluteChapter - 1, total, true));
-                            }
 
-                            @Override public void onWait(int seconds, String reason) {
-                                notifyNow(notification(book.title,
-                                        reason + ". Continuing automatically in " + seconds + " seconds.",
-                                        absoluteChapter - 1, total, true));
-                            }
-                        });
-                notifyNow(notification(bookTitle,
-                        "Chapter " + chapterNumber + " of " + total + " ready", chapterNumber, total, true));
+                try {
+                    final int absoluteChapter = chapterNumber;
+                    client.generateToWav(key, chapter.text, settings.voice(), settings.style(), target,
+                            new GeminiTtsClient.Progress() {
+                                @Override public void onChunk(int completed, int chunks) {
+                                    notifyNow(notification(book.title,
+                                            "Chapter " + absoluteChapter + " of " + total + " • part " + completed + " of " + chunks,
+                                            absoluteChapter - 1, total, true));
+                                }
+
+                                @Override public void onWait(int seconds, String reason) {
+                                    notifyNow(notification(book.title,
+                                            reason + ". Retrying automatically in " + seconds + " seconds.",
+                                            absoluteChapter - 1, total, true));
+                                }
+                            });
+                    queue.markChapterComplete(book.bookId, chapterNumber, total);
+                    notifyNow(notification(title,
+                            "Chapter " + chapterNumber + " of " + total + " ready",
+                            chapterNumber, total, true));
+                } catch (GeminiTtsClient.TtsException e) {
+                    handleTtsFailure(job.bookId, title, i, total, e);
+                    return;
+                } catch (OutOfMemoryError e) {
+                    long retryAt = System.currentTimeMillis() + 10L * 60_000L;
+                    queue.markWaiting(job.bookId, i, total, retryAt, "Device memory pressure");
+                    scheduleRetry(this, retryAt);
+                    notifyNow(notification(title,
+                            "Generation paused because the device was low on memory. It will continue automatically.",
+                            i, total, false));
+                    return;
+                } catch (Exception e) {
+                    long retryAt = System.currentTimeMillis() + persistentRetryMillis(job.failures, false, 120);
+                    queue.markWaiting(job.bookId, i, total, retryAt, safeMessage(e));
+                    scheduleRetry(this, retryAt);
+                    notifyNow(notification(title,
+                            "Temporary generation problem. Chapter " + chapterNumber + " will retry automatically.",
+                            i, total, false));
+                    return;
+                } finally {
+                    releaseWakeLock();
+                }
             }
 
-            notifyNow(notification(bookTitle,
-                    "Audiobook ready. Open WoW Audio and press Play.", total, total, false));
+            queue.markDone(book.bookId, total);
+            cancelRetryAlarm(this);
+            notifyNow(notification(title,
+                    "Audiobook ready. All " + total + " chapters are available offline. Press Play on Home.",
+                    total, total, false));
         } catch (Exception e) {
-            String message = e.getMessage() == null || e.getMessage().trim().isEmpty()
-                    ? "Narration stopped. Open WoW Audio to try again."
-                    : "Narration paused: " + shortMessage(e.getMessage());
-            notifyNow(notification(bookTitle, message, 0, 0, false));
-        } finally {
-            finishJob(bookId);
+            long retryAt = System.currentTimeMillis() + 2L * 60_000L;
+            queue.markWaiting(job.bookId, Math.max(0, job.nextChapter), job.totalChapters, retryAt, safeMessage(e));
+            scheduleRetry(this, retryAt);
+            notifyNow(notification(title,
+                    "Preparation paused temporarily and will continue automatically.",
+                    Math.max(0, job.nextChapter), Math.max(0, job.totalChapters), false));
         }
     }
 
-    private synchronized void finishJob(String bookId) {
-        queued.remove(bookId);
-        pendingJobs = Math.max(0, pendingJobs - 1);
-        if (pendingJobs == 0) {
-            stopForeground(false);
-            stopSelf();
+    private void handleTtsFailure(String bookId, String title, int chapterIndex, int total, GeminiTtsClient.TtsException e) {
+        if (e.authenticationFailure) {
+            queue.markAuthRequired(bookId, chapterIndex, total, safeMessage(e));
+            notifyNow(notification(title,
+                    "Gemini API key needs attention. Open WoW Audio and use Test + preview voice once.",
+                    chapterIndex, total, false));
+            return;
         }
+        if (!e.retryable) {
+            queue.markBlocked(bookId, chapterIndex, total, safeMessage(e));
+            notifyNow(notification(title,
+                    "Narration is blocked by the current Gemini response. Open More options for details.",
+                    chapterIndex, total, false));
+            return;
+        }
+
+        GenerationQueueStore.Job current = queue.get(bookId);
+        int failures = current == null ? 0 : current.failures;
+        long waitMs = persistentRetryMillis(failures, e.rateLimited, e.suggestedRetrySeconds);
+        long retryAt = System.currentTimeMillis() + waitMs;
+        queue.markWaiting(bookId, chapterIndex, total, retryAt, safeMessage(e));
+        scheduleRetry(this, retryAt);
+        long minutes = Math.max(1, Math.round(waitMs / 60000.0));
+        String reason = e.rateLimited ? "Gemini quota/rate limit" : "Temporary network or Gemini error";
+        notifyNow(notification(title,
+                reason + ". Chapter " + (chapterIndex + 1) + " will continue automatically in about " + minutes + " minutes.",
+                chapterIndex, total, false));
+    }
+
+    private static long persistentRetryMillis(int previousFailures, boolean rateLimited, int suggestedSeconds) {
+        int failure = Math.max(0, previousFailures);
+        if (rateLimited) {
+            long[] waits = {5, 15, 30, 60, 120, 240};
+            long minutes = waits[Math.min(waits.length - 1, failure)];
+            long suggestedMs = Math.max(0, suggestedSeconds) * 1000L;
+            return Math.max(minutes * 60_000L, suggestedMs);
+        }
+        long[] waits = {1, 2, 5, 10, 20, 30};
+        long minutes = waits[Math.min(waits.length - 1, failure)];
+        return Math.max(minutes * 60_000L, Math.max(0, suggestedSeconds) * 1000L);
+    }
+
+    private void renewWakeLock() {
+        if (wakeLock == null) return;
+        try {
+            if (wakeLock.isHeld()) wakeLock.release();
+            wakeLock.acquire(30L * 60_000L);
+        } catch (Exception ignored) { }
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock == null) return;
+        try { if (wakeLock.isHeld()) wakeLock.release(); }
+        catch (Exception ignored) { }
+    }
+
+    private synchronized void finishServiceIfIdle() {
+        if (draining) return;
+        stopForeground(false);
+        stopSelf();
+    }
+
+    private static void scheduleRetry(Context context, long whenMs) {
+        if (context == null || whenMs <= System.currentTimeMillis()) {
+            if (context != null) startDrain(context);
+            return;
+        }
+        AlarmManager alarms = (AlarmManager) context.getSystemService(ALARM_SERVICE);
+        if (alarms == null) return;
+        PendingIntent pending = retryPendingIntent(context);
+        if (Build.VERSION.SDK_INT >= 23) alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, whenMs, pending);
+        else alarms.set(AlarmManager.RTC_WAKEUP, whenMs, pending);
+    }
+
+    private static void cancelRetryAlarm(Context context) {
+        AlarmManager alarms = (AlarmManager) context.getSystemService(ALARM_SERVICE);
+        if (alarms != null) alarms.cancel(retryPendingIntent(context));
+    }
+
+    private static PendingIntent retryPendingIntent(Context context) {
+        Intent retry = new Intent(context, GenerationResumeReceiver.class).setAction(GenerationResumeReceiver.ACTION_RETRY);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getBroadcast(context, RETRY_REQUEST, retry, flags);
     }
 
     private Notification notification(String title, String text, int progress, int max, boolean ongoing) {
         Intent open = new Intent(this, MainActivity.class)
                 .setAction(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 23) pendingFlags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent content = PendingIntent.getActivity(this, 0, open, pendingFlags);
@@ -164,12 +346,17 @@ public class NarrationGenerationService extends Service {
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(channel);
     }
 
-    private static String shortMessage(String value) {
-        String oneLine = value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim();
-        return oneLine.length() > 150 ? oneLine.substring(0, 150) + "…" : oneLine;
+    private static String safeMessage(Throwable error) {
+        String message = error == null ? "" : error.getMessage();
+        if (empty(message)) message = error == null ? "Unknown generation error" : error.getClass().getSimpleName();
+        String oneLine = message.replace('\n', ' ').replace('\r', ' ').trim();
+        return oneLine.length() > 180 ? oneLine.substring(0, 180) + "…" : oneLine;
     }
 
+    private static boolean empty(String value) { return value == null || value.trim().isEmpty(); }
+
     @Override public void onDestroy() {
+        releaseWakeLock();
         executor.shutdownNow();
         super.onDestroy();
     }
