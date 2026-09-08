@@ -14,6 +14,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Stable WoW Reader -> WoW Audio contract. -->
             <intent-filter>
                 <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -21,12 +22,21 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
+            <!-- Standalone Open with from Files / Downloads / Telegram. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:mimeType="application/epub+zip" />
-                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+
+            <!-- Share an EPUB into WoW Audio. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
     </application>
