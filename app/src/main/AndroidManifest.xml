@@ -90,7 +90,12 @@
         <receiver
             android:name=".GenerationResumeReceiver"
             android:enabled="true"
-            android:exported="false">
+            android:exported="false" />
+
+        <receiver
+            android:name=".GenerationBootReceiver"
+            android:enabled="true"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
