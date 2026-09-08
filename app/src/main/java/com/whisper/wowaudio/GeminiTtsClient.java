@@ -18,26 +18,37 @@ import java.util.List;
 final class GeminiTtsClient {
     static final String MODEL = "gemini-3.1-flash-tts-preview";
     private static final String ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
-    private static final int MAX_CHARS_PER_REQUEST = 5000;
+    private static final int MAX_CHARS_PER_REQUEST = 1400;
     private static final int MAX_ATTEMPTS = 3;
 
     interface Progress {
         void onChunk(int completed, int total);
     }
 
-    void generateToWav(String apiKey, String text, String voice, String style, File output, Progress progress) throws Exception {
+    GenerationResult generateToWav(String apiKey, String text, String voice, String style, File output, Progress progress) throws Exception {
         if (empty(apiKey)) throw new Exception("Gemini API key is missing");
         if (empty(text)) throw new Exception("Chapter has no readable text");
-        List<String> chunks = chunk(text);
+        String speechText = MyanmarTextNormalizer.normalizeForSpeech(text);
+        if (empty(speechText)) throw new Exception("Chapter has no speakable text");
+        List<String> chunks = chunk(speechText);
         ByteArrayOutputStream pcm = new ByteArrayOutputStream();
-        int sampleRate = 24000;
+        List<AudioTimingStore.Segment> timings = new ArrayList<>();
+        int outputSampleRate = 24000;
+        long cursorMs = 0;
         for (int i = 0; i < chunks.size(); i++) {
             AudioBlock block = request(apiKey.trim(), chunks.get(i), voice, style);
-            sampleRate = block.sampleRate > 0 ? block.sampleRate : sampleRate;
-            pcm.write(asPcm(block.data));
+            int sampleRate = block.sampleRate > 0 ? block.sampleRate : 24000;
+            if (i == 0) outputSampleRate = sampleRate;
+            byte[] blockPcm = asPcm(block.data);
+            pcm.write(blockPcm);
+            long durationMs = pcmDurationMs(blockPcm, sampleRate);
+            timings.add(new AudioTimingStore.Segment(chunks.get(i), cursorMs, cursorMs + durationMs));
+            cursorMs += durationMs;
             if (progress != null) progress.onChunk(i + 1, chunks.size());
         }
-        WavUtil.writePcm16Mono(output, pcm.toByteArray(), sampleRate);
+        WavUtil.writePcm16Mono(output, pcm.toByteArray(), outputSampleRate);
+        AudioTimingStore.write(output, timings);
+        return new GenerationResult(speechText, timings);
     }
 
     private AudioBlock request(String apiKey, String text, String voice, String style) throws Exception {
@@ -112,10 +123,10 @@ final class GeminiTtsClient {
 
     private static String prompt(String style, String text) {
         String direction = empty(style) ? NarrationSettings.DEFAULT_STYLE : style.trim();
-        return direction + "\n\nRead only the following book text. Do not add, omit, translate, summarize, or explain anything:\n\n" + text;
+        return direction + "\n\nRead only the following prepared book text. Do not add, omit, translate, summarize, or explain anything:\n\n" + text;
     }
 
-    private static List<String> chunk(String text) {
+    static List<String> chunk(String text) {
         List<String> out = new ArrayList<>();
         String value = text == null ? "" : text.trim();
         int start = 0;
@@ -133,8 +144,13 @@ final class GeminiTtsClient {
             if (!part.isEmpty()) out.add(part);
             start = end;
         }
-        if (out.isEmpty()) out.add(value);
+        if (out.isEmpty() && !value.isEmpty()) out.add(value);
         return out;
+    }
+
+    private static long pcmDurationMs(byte[] pcm, int sampleRate) {
+        if (pcm == null || sampleRate <= 0) return 0;
+        return Math.max(1L, Math.round((pcm.length * 1000.0) / (sampleRate * 2.0)));
     }
 
     private static byte[] asPcm(byte[] data) {
@@ -185,6 +201,15 @@ final class GeminiTtsClient {
     }
 
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
+
+    static final class GenerationResult {
+        final String speechText;
+        final List<AudioTimingStore.Segment> timings;
+        GenerationResult(String speechText, List<AudioTimingStore.Segment> timings) {
+            this.speechText = speechText;
+            this.timings = timings;
+        }
+    }
 
     private static final class ApiException extends Exception {
         final int statusCode;
