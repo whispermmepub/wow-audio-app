@@ -93,14 +93,27 @@ jobs:
         run: |
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          EXPECTED_SHA256="5F58AB463C3A43275DD768FB3BDB2AAEF388B5C18A4D6076B0C5339B4AEE0FE1"
+          for APK in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk; do
+            "$APKSIGNER" verify --verbose --print-certs "$APK"
+            ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print toupper($2); exit}' | tr -d ':')
+            [[ "$ACTUAL" == "$EXPECTED_SHA256" ]]
+          done
 
       - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
           name: WoW-Audio-v1.1.0-accessible-auto-audio-test
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload release package for first stable signing
+        if: env.WOW_AUDIO_STABLE_SIGNING != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.1.0-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 3
 
