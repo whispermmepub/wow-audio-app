@@ -14,6 +14,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -89,13 +90,15 @@ final class GeminiTtsClient {
                 if (code < 200 || code >= 300) {
                     int wait = retryDelaySeconds(code, attempt, retryAfter, response);
                     boolean retryable = retryable(code);
+                    String errorMessage = apiError(code, response);
+                    boolean authFailure = code == 401 || code == 403 || (code == 400 && looksLikeApiKeyError(response, errorMessage));
                     TtsException api = new TtsException(
                             code,
                             retryable,
-                            code == 401 || code == 403,
+                            authFailure,
                             code == 429,
                             wait,
-                            apiError(code, response),
+                            errorMessage,
                             null);
                     if (retryable && attempt < MAX_ATTEMPTS) {
                         last = api;
@@ -118,7 +121,7 @@ final class GeminiTtsClient {
                 last = new TtsException(0, true, false, false, wait,
                         e.getMessage() == null ? "Network or Gemini response error" : e.getMessage(), e);
                 if (attempt >= MAX_ATTEMPTS) throw last;
-                if (progress != null) progress.onWait(wait, "Network retry");
+                if (progress != null) progress.onWait(wait, "Network or response retry");
                 sleepSeconds(wait);
             } finally {
                 if (c != null) c.disconnect();
@@ -145,7 +148,14 @@ final class GeminiTtsClient {
                 }
             }
         }
-        throw new TtsException(0, true, false, false, 30, "Gemini returned no audio", null);
+        // This is usually transient. Throw a normal exception so request() retries it.
+        throw new Exception("Gemini returned no audio");
+    }
+
+    private static boolean looksLikeApiKeyError(String response, String message) {
+        String value = (safe(response) + " " + safe(message)).toLowerCase(Locale.US);
+        return value.contains("api key") || value.contains("api_key") || value.contains("apikey") ||
+                value.contains("key invalid") || value.contains("invalid key") || value.contains("permission denied");
     }
 
     private static void awaitRequestSlot() throws InterruptedException {
@@ -327,6 +337,7 @@ final class GeminiTtsClient {
         return "Gemini request failed (HTTP " + code + ")";
     }
 
+    private static String safe(String value) { return value == null ? "" : value; }
     private static boolean empty(String s) { return s == null || s.trim().isEmpty(); }
 
     static final class TtsException extends Exception {
