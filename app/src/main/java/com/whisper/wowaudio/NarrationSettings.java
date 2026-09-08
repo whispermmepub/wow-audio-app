@@ -9,9 +9,11 @@ final class NarrationSettings {
 
     private static final String PREFS = "wow_audio_narration";
     private final SharedPreferences prefs;
+    private final Context context;
 
     NarrationSettings(Context context) {
-        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this.context = context.getApplicationContext();
+        prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
     String voice() { return prefs.getString("voice", DEFAULT_VOICE); }
@@ -20,10 +22,16 @@ final class NarrationSettings {
     int sleepMinutes() { return Math.max(0, prefs.getInt("sleep_minutes", 0)); }
 
     void save(String voice, String style) {
+        String nextVoice = empty(voice) ? DEFAULT_VOICE : voice.trim();
+        String nextStyle = empty(style) ? DEFAULT_STYLE : style.trim();
+        boolean changed = !nextVoice.equals(this.voice()) || !nextStyle.equals(this.style());
         prefs.edit()
-                .putString("voice", empty(voice) ? DEFAULT_VOICE : voice.trim())
-                .putString("style", empty(style) ? DEFAULT_STYLE : style.trim())
-                .apply();
+                .putString("voice", nextVoice)
+                .putString("style", nextStyle)
+                .commit();
+        if (changed && new SecretStore(context).hasApiKey()) {
+            NarrationGenerationService.enqueueAllLibrary(context);
+        }
     }
 
     void savePlayback(float speed, int sleepMinutes) {
