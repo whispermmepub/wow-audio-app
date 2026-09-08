@@ -2,9 +2,11 @@ package com.whisper.wowaudio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Base64;
 
 import org.json.JSONObject;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -38,6 +40,9 @@ final class GenerationQueueStore {
             job.nextChapter = 0;
             job.failures = 0;
             job.totalChapters = 0;
+            job.revision = Math.max(1L, (old == null ? 0L : old.revision) + 1L);
+        } else if (job.revision <= 0) {
+            job.revision = 1L;
         }
         put(job);
         return job;
@@ -45,6 +50,11 @@ final class GenerationQueueStore {
 
     synchronized Job get(String bookId) {
         if (empty(bookId)) return null;
+        String direct = prefs.getString(key(bookId), null);
+        Job parsed = parse(direct);
+        if (parsed != null && bookId.equals(parsed.bookId)) return parsed;
+
+        // Compatibility fallback for any earlier queue-key shape.
         for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
             if (!entry.getKey().startsWith(PREFIX) || !(entry.getValue() instanceof String)) continue;
             Job job = parse((String) entry.getValue());
@@ -69,7 +79,7 @@ final class GenerationQueueStore {
         for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
             if (!entry.getKey().startsWith(PREFIX) || !(entry.getValue() instanceof String)) continue;
             Job job = parse((String) entry.getValue());
-            if (job != null) result.add(job);
+            if (job != null && !containsBook(result, job.bookId)) result.add(job);
         }
         return result;
     }
@@ -83,8 +93,14 @@ final class GenerationQueueStore {
         return earliest;
     }
 
-    synchronized void markChapterComplete(String bookId, int nextChapter, int totalChapters) {
-        Job job = require(bookId);
+    synchronized boolean isCurrentRevision(String bookId, long revision) {
+        Job current = get(bookId);
+        return current != null && current.revision == revision;
+    }
+
+    synchronized void markChapterComplete(String bookId, long revision, int nextChapter, int totalChapters) {
+        Job job = requireCurrent(bookId, revision);
+        if (job == null) return;
         job.state = STATE_PENDING;
         job.nextChapter = Math.max(0, nextChapter);
         job.totalChapters = Math.max(0, totalChapters);
@@ -95,8 +111,9 @@ final class GenerationQueueStore {
         put(job);
     }
 
-    synchronized void markWaiting(String bookId, int chapter, int totalChapters, long retryAt, String error) {
-        Job job = require(bookId);
+    synchronized void markWaiting(String bookId, long revision, int chapter, int totalChapters, long retryAt, String error) {
+        Job job = requireCurrent(bookId, revision);
+        if (job == null) return;
         job.state = STATE_WAITING;
         job.nextChapter = Math.max(0, chapter);
         job.totalChapters = Math.max(0, totalChapters);
@@ -107,20 +124,21 @@ final class GenerationQueueStore {
         put(job);
     }
 
-    synchronized void markSetupRequired(String bookId, int chapter, int totalChapters) {
-        markState(bookId, STATE_SETUP, chapter, totalChapters, 0, "Gemini API key required");
+    synchronized void markSetupRequired(String bookId, long revision, int chapter, int totalChapters) {
+        markState(bookId, revision, STATE_SETUP, chapter, totalChapters, 0, "Gemini API key required");
     }
 
-    synchronized void markAuthRequired(String bookId, int chapter, int totalChapters, String error) {
-        markState(bookId, STATE_AUTH, chapter, totalChapters, 0, error);
+    synchronized void markAuthRequired(String bookId, long revision, int chapter, int totalChapters, String error) {
+        markState(bookId, revision, STATE_AUTH, chapter, totalChapters, 0, error);
     }
 
-    synchronized void markBlocked(String bookId, int chapter, int totalChapters, String error) {
-        markState(bookId, STATE_BLOCKED, chapter, totalChapters, 0, error);
+    synchronized void markBlocked(String bookId, long revision, int chapter, int totalChapters, String error) {
+        markState(bookId, revision, STATE_BLOCKED, chapter, totalChapters, 0, error);
     }
 
-    synchronized void markDone(String bookId, int totalChapters) {
-        Job job = require(bookId);
+    synchronized void markDone(String bookId, long revision, int totalChapters) {
+        Job job = requireCurrent(bookId, revision);
+        if (job == null) return;
         job.state = STATE_DONE;
         job.nextChapter = Math.max(0, totalChapters);
         job.totalChapters = Math.max(0, totalChapters);
@@ -132,12 +150,21 @@ final class GenerationQueueStore {
     }
 
     synchronized void remove(String bookId) {
-        Job job = get(bookId);
-        if (job != null) prefs.edit().remove(key(job.bookId)).apply();
+        if (empty(bookId)) return;
+        prefs.edit().remove(key(bookId)).apply();
+        // Also remove any compatibility-key entry for this same book.
+        SharedPreferences.Editor editor = prefs.edit();
+        for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
+            if (!(entry.getValue() instanceof String)) continue;
+            Job job = parse((String) entry.getValue());
+            if (job != null && bookId.equals(job.bookId)) editor.remove(entry.getKey());
+        }
+        editor.apply();
     }
 
-    private void markState(String bookId, String state, int chapter, int totalChapters, long retryAt, String error) {
-        Job job = require(bookId);
+    private void markState(String bookId, long revision, String state, int chapter, int totalChapters, long retryAt, String error) {
+        Job job = requireCurrent(bookId, revision);
+        if (job == null) return;
         job.state = state;
         job.nextChapter = Math.max(0, chapter);
         job.totalChapters = Math.max(0, totalChapters);
@@ -147,9 +174,10 @@ final class GenerationQueueStore {
         put(job);
     }
 
-    private Job require(String bookId) {
+    private Job requireCurrent(String bookId, long revision) {
         Job job = get(bookId);
-        return job == null ? new Job(bookId) : job.copy();
+        if (job == null || job.revision != revision) return null;
+        return job.copy();
     }
 
     private void put(Job job) {
@@ -163,6 +191,7 @@ final class GenerationQueueStore {
             o.put("retryAt", job.retryAt);
             o.put("lastError", job.lastError);
             o.put("updatedAt", job.updatedAt);
+            o.put("revision", Math.max(1L, job.revision));
             prefs.edit().putString(key(job.bookId), o.toString()).commit();
         } catch (Exception ignored) { }
     }
@@ -181,12 +210,20 @@ final class GenerationQueueStore {
             job.retryAt = Math.max(0, o.optLong("retryAt", 0));
             job.lastError = o.optString("lastError", "");
             job.updatedAt = o.optLong("updatedAt", 0);
+            job.revision = Math.max(1L, o.optLong("revision", 1L));
             return job;
         } catch (Exception ignored) { return null; }
     }
 
+    private static boolean containsBook(List<Job> jobs, String bookId) {
+        for (Job job : jobs) if (job.bookId.equals(bookId)) return true;
+        return false;
+    }
+
     private static String key(String bookId) {
-        return PREFIX + Integer.toHexString(safe(bookId).hashCode()) + "_" + safe(bookId).length();
+        String encoded = Base64.encodeToString(safe(bookId).getBytes(StandardCharsets.UTF_8),
+                Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+        return PREFIX + encoded;
     }
 
     static final class Job {
@@ -198,6 +235,7 @@ final class GenerationQueueStore {
         long retryAt;
         String lastError = "";
         long updatedAt = System.currentTimeMillis();
+        long revision = 1L;
 
         Job(String bookId) { this.bookId = safe(bookId); }
 
@@ -210,6 +248,7 @@ final class GenerationQueueStore {
             copy.retryAt = retryAt;
             copy.lastError = lastError;
             copy.updatedAt = updatedAt;
+            copy.revision = revision;
             return copy;
         }
     }
