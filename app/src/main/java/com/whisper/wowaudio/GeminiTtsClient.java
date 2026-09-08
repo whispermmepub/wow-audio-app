@@ -42,7 +42,7 @@ final class GeminiTtsClient {
             byte[] blockPcm = asPcm(block.data);
             pcm.write(blockPcm);
             long durationMs = pcmDurationMs(blockPcm, sampleRate);
-            timings.add(new AudioTimingStore.Segment(chunks.get(i), cursorMs, cursorMs + durationMs));
+            appendSentenceTimings(timings, chunks.get(i), cursorMs, durationMs);
             cursorMs += durationMs;
             if (progress != null) progress.onChunk(i + 1, chunks.size());
         }
@@ -146,6 +146,55 @@ final class GeminiTtsClient {
         }
         if (out.isEmpty() && !value.isEmpty()) out.add(value);
         return out;
+    }
+
+    private static void appendSentenceTimings(List<AudioTimingStore.Segment> output, String chunk, long startMs, long durationMs) {
+        List<String> sentences = sentenceUnits(chunk);
+        if (sentences.isEmpty()) {
+            output.add(new AudioTimingStore.Segment(chunk, startMs, startMs + durationMs));
+            return;
+        }
+        int totalWeight = 0;
+        for (String sentence : sentences) totalWeight += Math.max(1, speechWeight(sentence));
+        long cursor = startMs;
+        long chunkEnd = startMs + Math.max(1, durationMs);
+        int usedWeight = 0;
+        for (int i = 0; i < sentences.size(); i++) {
+            String sentence = sentences.get(i);
+            int weight = Math.max(1, speechWeight(sentence));
+            usedWeight += weight;
+            long end = i == sentences.size() - 1
+                    ? chunkEnd
+                    : startMs + Math.round(durationMs * (usedWeight / (double) Math.max(1, totalWeight)));
+            end = Math.max(cursor + 1, Math.min(chunkEnd, end));
+            output.add(new AudioTimingStore.Segment(sentence, cursor, end));
+            cursor = end;
+        }
+    }
+
+    private static List<String> sentenceUnits(String text) {
+        List<String> result = new ArrayList<>();
+        if (empty(text)) return result;
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            current.append(c);
+            boolean boundary = c == '။' || c == '.' || c == '!' || c == '?' || c == '\n';
+            if (boundary && current.toString().trim().length() > 1) {
+                String sentence = current.toString().trim();
+                if (!sentence.isEmpty()) result.add(sentence);
+                current.setLength(0);
+            }
+        }
+        String tail = current.toString().trim();
+        if (!tail.isEmpty()) result.add(tail);
+        return result;
+    }
+
+    private static int speechWeight(String text) {
+        int weight = 0;
+        for (int i = 0; i < text.length(); i++) if (!Character.isWhitespace(text.charAt(i))) weight++;
+        return weight;
     }
 
     private static long pcmDurationMs(byte[] pcm, int sampleRate) {
