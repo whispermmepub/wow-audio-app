@@ -15,6 +15,7 @@ public class WoWAudioApplication extends Application implements Application.Acti
     @Override public void onActivityStarted(Activity activity) {
         if (resumedOnce) return;
         resumedOnce = true;
+        LibraryGenerationReconciler.reconcile(this);
         NarrationGenerationService.resumePending(this);
     }
 
