@@ -2,7 +2,7 @@ name: Build WoW Audio
 
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [main, 'feature/**', 'fix/**']
     paths:
       - 'app/**'
       - 'build.gradle'
@@ -43,6 +43,8 @@ jobs:
           grep -q "application/epub+zip" app/src/main/AndroidManifest.xml
           grep -q "application/pdf" app/src/main/AndroidManifest.xml
           grep -q "importToPrivateStorage" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "SEND_MULTIPLE" app/src/main/AndroidManifest.xml
+          grep -q "ShareImportActivity" app/src/main/AndroidManifest.xml
           git diff --check
 
       - name: Build and lint
@@ -55,15 +57,15 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='3'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.0.0'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='4'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.0.1'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
 
       - name: Upload debug test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.0.0-final-debug
+          name: WoW-Audio-v1.0.1-whole-book-share-fix-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 3
