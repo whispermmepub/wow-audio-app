@@ -8,7 +8,6 @@ import android.os.IBinder;
 import android.os.PowerManager;
 
 import java.io.File;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,12 +54,15 @@ public class NarrationGenerationService extends Service {
     }
 
     private static void startDrain(Context context) {
+        // A visible/user-initiated foreground drain is the fastest path. Cancel any
+        // queued recovery work first; if Android rejects the FGS start, immediately
+        // restore WorkManager as the durable fallback.
+        NarrationWorkScheduler.cancel(context);
         Intent intent = new Intent(context, NarrationGenerationService.class).setAction(ACTION_DRAIN);
         try {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
             else context.startService(intent);
         } catch (Exception ignored) {
-            // Android can reject background FGS starts. WorkManager is the durable fallback.
             NarrationWorkScheduler.schedule(context, 0);
         }
     }
@@ -148,12 +150,12 @@ public class NarrationGenerationService extends Service {
     }
 
     @Override public void onTimeout(int startId, int fgsType) {
-        // Android 15+ limits dataSync FGS time. Queue progress already lives on disk,
-        // so hand recovery to WorkManager instead of risking a system crash.
+        // Android 15+ limits dataSync foreground-service time. Queue progress already
+        // lives on disk, so hand recovery to WorkManager instead of risking a crash.
         stopping = true;
-        NarrationWorkScheduler.schedule(this, 6L * 60L * 60_000L);
+        NarrationWorkScheduler.schedule(this, 60_000L);
         NarrationNotificationHelper.notify(this, "WoW Audio",
-                "Android paused a very long preparation session. Progress is saved and will resume automatically later.",
+                "Android paused a very long preparation session. Progress is saved and will resume automatically.",
                 0, 0, false);
         releaseWakeLock();
         executor.shutdownNow();
