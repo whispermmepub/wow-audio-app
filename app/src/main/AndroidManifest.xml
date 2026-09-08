@@ -29,6 +29,12 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
+            <!-- Fallback for Reader builds/providers that omit MIME type. -->
+            <intent-filter>
+                <action android:name="com.whisper.wowaudio.action.OPEN_BOOK" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
             <!-- Standalone Open with from Files / Downloads / Telegram. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -36,14 +42,31 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
 
-            <!-- Share an EPUB into WoW Audio. -->
+            <!-- Share EPUB files into WoW Audio. Some providers report generic MIME types. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 
