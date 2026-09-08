@@ -1,52 +1,42 @@
 package com.whisper.wowaudio;
 
+import android.Manifest;
 import android.app.Activity;
-import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
-
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.zip.ZipEntry;
+import java.util.Locale;
 import java.util.zip.ZipFile;
-
-import javax.xml.parsers.DocumentBuilderFactory;
 
 public class MainActivity extends Activity {
     private static final int PICK_EPUB = 1001;
+    private static final int NOTIFICATION_PERMISSION = 4102;
     private static final String WOW_OPEN_BOOK = "com.whisper.wowaudio.action.OPEN_BOOK";
-    private final List<Book> books = new ArrayList<>();
+
+    private final List<NarrationUi.BookInput> books = new ArrayList<>();
     private BookIndex bookIndex;
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -58,6 +48,14 @@ public class MainActivity extends Activity {
         loadLibrary();
         showLibrary();
         handleIntent(getIntent());
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (bookIndex != null && getIntent() != null && Intent.ACTION_MAIN.equals(getIntent().getAction())) {
+            loadLibrary();
+            showLibrary();
+        }
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -76,43 +74,49 @@ public class MainActivity extends Activity {
     private void handleIntent(Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
-        if (!WOW_OPEN_BOOK.equals(action) && !Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_SEND.equals(action)) return;
-        Uri uri = extractIncomingUri(intent);
+        if (!WOW_OPEN_BOOK.equals(action) && !Intent.ACTION_VIEW.equals(action)) return;
+        Uri uri = intent.getData();
         if (uri == null) return;
         importUri(uri, intent.getStringExtra("wow_book_title"), intent.getStringExtra("wow_book_author"), WOW_OPEN_BOOK.equals(action));
-    }
-
-    private Uri extractIncomingUri(Intent intent) {
-        if (!Intent.ACTION_SEND.equals(intent.getAction())) return intent.getData();
-        Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        if (uri != null) return uri;
-        ClipData clip = intent.getClipData();
-        if (clip != null && clip.getItemCount() > 0) return clip.getItemAt(0).getUri();
-        return intent.getData();
     }
 
     private void launchPicker() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("application/epub+zip");
-        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/epub+zip", "application/octet-stream"});
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/epub+zip", "application/octet-stream", "application/zip", "application/x-zip-compressed"
+        });
         startActivityForResult(i, PICK_EPUB);
     }
 
     private void importUri(Uri uri, String suppliedTitle, String suppliedAuthor, boolean fromReader) {
         new Thread(() -> {
+            File imported = null;
             try {
-                File imported = importToPrivateStorage(uri);
-                Book parsed = parseBook(imported, suppliedTitle, suppliedAuthor);
-                bookIndex.put(new BookIndex.Entry(imported.getName(), sha256(imported), parsed.title, parsed.author, imported.lastModified()));
+                imported = importToPrivateStorage(uri);
+                NarrationUi.BookInput parsed = NarrationSourceLoader.load(this, imported.getName());
+                String title = empty(suppliedTitle) ? parsed.title : suppliedTitle.trim();
+                String author = empty(suppliedAuthor) ? parsed.author : suppliedAuthor.trim();
+                bookIndex.put(new BookIndex.Entry(imported.getName(), sha256(imported), title, author, imported.lastModified()));
+                final String bookId = imported.getName();
                 runOnUiThread(() -> {
                     loadLibrary();
-                    Book target = findBook(imported);
-                    if (target == null) target = parsed;
-                    Toast.makeText(this, fromReader ? "Book received" : "EPUB imported", Toast.LENGTH_SHORT).show();
-                    showBookDetail(target);
+                    boolean hasKey = new SecretStore(this).hasApiKey();
+                    String message = fromReader ? "Book received." : "Book imported.";
+                    message += hasKey
+                            ? " Narration is being prepared automatically in the background."
+                            : " Set up narration once to start automatic preparation.";
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    showLibrary();
+                    announceForAccessibility(message);
+                    if (!hasKey) {
+                        NarrationUi.BookInput target = findBook(bookId);
+                        if (target != null) showBookDetail(target);
+                    }
                 });
             } catch (Exception e) {
+                if (imported != null && imported.isFile() && !isIndexed(imported.getName())) imported.delete();
                 runOnUiThread(() -> Toast.makeText(this, "Unable to import this EPUB", Toast.LENGTH_LONG).show());
             }
         }, "wow-audio-import").start();
@@ -121,21 +125,35 @@ public class MainActivity extends Activity {
     private File importToPrivateStorage(Uri uri) throws Exception {
         File dir = libraryDir();
         String display = displayName(uri);
-        if (display == null || display.trim().isEmpty()) display = "Imported-book.epub";
+        if (empty(display)) display = "Imported-book.epub";
         display = display.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (!display.toLowerCase(Locale.US).endsWith(".epub")) display += ".epub";
+
         File temp = File.createTempFile("import-", ".epub", getCacheDir());
-        try (InputStream in = getContentResolver().openInputStream(uri); FileOutputStream fos = new FileOutputStream(temp)) {
+        try (InputStream in = getContentResolver().openInputStream(uri); FileOutputStream out = new FileOutputStream(temp)) {
             if (in == null) throw new Exception("No input stream");
-            byte[] buf = new byte[64 * 1024]; int n;
-            while ((n = in.read(buf)) >= 0) fos.write(buf, 0, n);
+            byte[] buffer = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buffer)) >= 0) out.write(buffer, 0, n);
         }
+        try (ZipFile zip = new ZipFile(temp)) {
+            if (zip.getEntry("META-INF/container.xml") == null) throw new Exception("Not an EPUB");
+        }
+
         String hash = sha256(temp);
-        for (File f : safeFiles(dir)) if (f.isFile() && sha256(f).equals(hash)) { temp.delete(); return f; }
+        for (File file : safeFiles(dir)) {
+            if (file.isFile() && file.getName().toLowerCase(Locale.US).endsWith(".epub") && sha256(file).equals(hash)) {
+                temp.delete();
+                return file;
+            }
+        }
+
         File out = uniqueFile(dir, display);
         if (!temp.renameTo(out)) {
             try (InputStream in = new java.io.FileInputStream(temp); FileOutputStream fos = new FileOutputStream(out)) {
-                byte[] buf = new byte[64 * 1024]; int n;
-                while ((n = in.read(buf)) >= 0) fos.write(buf, 0, n);
+                byte[] buffer = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buffer)) >= 0) fos.write(buffer, 0, n);
             }
             temp.delete();
         }
@@ -144,467 +162,390 @@ public class MainActivity extends Activity {
 
     private void loadLibrary() {
         books.clear();
-        Map<String, BookIndex.Entry> index = bookIndex.load();
-        for (File f : safeFiles(libraryDir())) {
-            if (!f.isFile() || !f.getName().toLowerCase().endsWith(".epub")) continue;
-            BookIndex.Entry saved = index.get(f.getName());
-            String title = saved == null || empty(saved.title) ? null : saved.title;
-            String author = saved == null || empty(saved.author) ? null : saved.author;
-            try { books.add(parseBook(f, title, author)); }
-            catch (Exception ignored) { books.add(Book.fallback(f, title, author)); }
+        File[] files = safeFiles(libraryDir());
+        java.util.Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
+        for (File file : files) {
+            if (!file.isFile() || !file.getName().toLowerCase(Locale.US).endsWith(".epub")) continue;
+            try { books.add(NarrationSourceLoader.load(this, file.getName())); }
+            catch (Exception ignored) { }
         }
-    }
-
-    private Book parseBook(File file, String suppliedTitle, String suppliedAuthor) throws Exception {
-        Book b = new Book();
-        b.file = file;
-        b.fileName = file.getName();
-        try (ZipFile zip = new ZipFile(file)) {
-            Document container = xml(zip, "META-INF/container.xml");
-            NodeList roots = container.getElementsByTagName("rootfile");
-            if (roots.getLength() == 0) throw new Exception("No OPF");
-            String opfPath = ((Element) roots.item(0)).getAttribute("full-path");
-            Document opf = xml(zip, opfPath);
-            b.title = firstText(opf, "dc:title");
-            b.author = firstText(opf, "dc:creator");
-            if (empty(b.title)) b.title = firstText(opf, "title");
-            if (empty(b.author)) b.author = firstText(opf, "creator");
-            if (!empty(suppliedTitle)) b.title = suppliedTitle;
-            if (!empty(suppliedAuthor)) b.author = suppliedAuthor;
-
-            Map<String, String> hrefs = new HashMap<>();
-            Map<String, String> media = new HashMap<>();
-            NodeList items = opf.getElementsByTagName("item");
-            String coverHref = null;
-            for (int i = 0; i < items.getLength(); i++) {
-                Element e = (Element) items.item(i);
-                String id = e.getAttribute("id");
-                String href = e.getAttribute("href");
-                hrefs.put(id, href);
-                media.put(id, e.getAttribute("media-type"));
-                if (e.getAttribute("properties").contains("cover-image") || id.toLowerCase().contains("cover")) coverHref = href;
-            }
-            if (coverHref != null) b.cover = readEntry(zip, EpubPath.resolve(opfPath, coverHref), 8 * 1024 * 1024);
-
-            Map<String, String> navTitles = EpubNavigation.titles(zip, opf, opfPath);
-            NodeList refs = opf.getElementsByTagName("itemref");
-            int chapterNo = 1;
-            for (int i = 0; i < refs.getLength(); i++) {
-                Element ref = (Element) refs.item(i);
-                String idref = ref.getAttribute("idref");
-                String href = hrefs.get(idref);
-                if (href == null) continue;
-                String mt = media.get(idref);
-                if (mt != null && !mt.contains("html") && !mt.contains("xhtml")) continue;
-                String chapterPath = EpubPath.resolve(opfPath, href);
-                byte[] raw = readEntry(zip, chapterPath, 4 * 1024 * 1024);
-                if (raw == null) continue;
-                String html = new String(raw, StandardCharsets.UTF_8);
-                String text = htmlToText(html);
-                if (text.length() < 2) continue;
-                String heading = navTitles.get(chapterPath);
-                if (empty(heading)) heading = extractHeading(html);
-                if (empty(heading)) heading = "Chapter " + chapterNo;
-                b.chapters.add(new Chapter(heading, text, chapterPath));
-                chapterNo++;
-            }
-        }
-        if (empty(b.title)) b.title = stripExtension(file.getName());
-        if (empty(b.author)) b.author = "Unknown author";
-        return b;
     }
 
     private void showLibrary() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = column();
-        root.setPadding(dp(22), dp(24), dp(22), dp(40));
+        root.setPadding(dp(20), dp(20), dp(20), dp(40));
         scroll.addView(root);
+        if (Build.VERSION.SDK_INT >= 28) root.setAccessibilityPaneTitle("WoW Audio library");
 
-        LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout heading = new LinearLayout(this);
-        heading.setOrientation(LinearLayout.VERTICAL);
-        TextView brand = text("WoW Audio", 30, Color.rgb(24, 27, 29), true);
-        heading.addView(brand);
-        heading.addView(text("Listen to your books, your way", 12, Color.rgb(111, 108, 101), false));
-        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
-        Button add = button("＋ Add Book");
+        TextView title = heading("WoW Audio", 30);
+        root.addView(title);
+        TextView intro = text("Add a book. WoW Audio prepares all chapters automatically, then you can play from this screen.", 14, Color.rgb(87, 86, 81), false);
+        intro.setLineSpacing(0, 1.25f);
+        intro.setPadding(0, dp(6), 0, dp(16));
+        root.addView(intro);
+
+        Button add = primaryButton("Add Book");
+        add.setContentDescription("Add Book. Import an EPUB from Files, Downloads, or another app.");
         add.setOnClickListener(v -> launchPicker());
-        header.addView(add);
-        root.addView(header);
-
-        TextView privacy = text("Private EPUB library • BYOK narration • offline playback", 11, Color.rgb(126, 122, 113), false);
-        privacy.setPadding(0, dp(7), 0, dp(24));
-        root.addView(privacy);
+        root.addView(add, fullButtonParams());
 
         if (books.isEmpty()) {
-            LinearLayout hero = card();
-            hero.setPadding(dp(22), dp(28), dp(22), dp(28));
-            hero.addView(text("🎧", 38, Color.DKGRAY, false));
-            TextView h = text("Turn EPUBs into listening", 22, Color.rgb(24, 27, 29), true);
-            h.setPadding(0, dp(14), 0, dp(7));
-            hero.addView(h);
-            TextView p = text("Import an EPUB from Files, Downloads or Telegram. Generate natural narration with your own Gemini key, then listen offline.", 14, Color.rgb(91, 91, 87), false);
-            p.setLineSpacing(0, 1.25f);
-            hero.addView(p);
-            Button cta = button("Import EPUB");
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-            lp.topMargin = dp(20);
-            hero.addView(cta, lp);
-            cta.setOnClickListener(v -> launchPicker());
-            root.addView(hero);
+            TextView empty = text("No books yet. Use Add Book to import your first EPUB.", 16, Color.rgb(58, 58, 55), false);
+            empty.setPadding(0, dp(26), 0, 0);
+            root.addView(empty);
             setContentView(scroll);
             return;
         }
 
-        ListeningProgressStore progressStore = new ListeningProgressStore(this);
-        ListeningProgressStore.Entry last = progressStore.last();
-        Book continueBook = last == null ? null : findBookById(last.bookId);
-        if (continueBook != null && last.audioPath != null && new File(last.audioPath).isFile()) {
-            root.addView(sectionTitle("Continue Listening"));
-            root.addView(continueCard(continueBook, last));
+        SecretStore secrets = new SecretStore(this);
+        if (!secrets.hasApiKey()) {
+            TextView setupHeading = heading("One-time narration setup", 20);
+            setupHeading.setPadding(0, dp(26), 0, dp(6));
+            root.addView(setupHeading);
+            TextView setupText = text("Add your Gemini API key once. After that, every imported book is prepared automatically.", 14, Color.rgb(80, 79, 74), false);
+            root.addView(setupText);
+            Button setup = primaryButton("Set up narration");
+            LinearLayout.LayoutParams setupParams = fullButtonParams();
+            setupParams.topMargin = dp(10);
+            root.addView(setup, setupParams);
+            setup.setOnClickListener(v -> showAdvancedNarration(books.get(0)));
         }
 
-        List<Book> offline = offlineBooks();
-        if (!offline.isEmpty()) {
-            root.addView(sectionTitle("Downloaded / Offline"));
-            for (Book b : offline) root.addView(bookCard(b, true));
+        ListeningProgressStore.Entry last = new ListeningProgressStore(this).last();
+        NarrationUi.BookInput continueBook = last == null ? null : findBook(last.bookId);
+        if (continueBook != null && canPlayAt(continueBook, last.chapterIndex)) {
+            TextView continueHeading = heading("Continue Listening", 20);
+            continueHeading.setPadding(0, dp(28), 0, dp(8));
+            root.addView(continueHeading);
+            Button resume = primaryButton("Resume " + continueBook.title);
+            resume.setContentDescription("Resume listening to " + continueBook.title + ", chapter " + (last.chapterIndex + 1) + ", " + ListeningProgressStore.percent(last) + " percent through the current chapter.");
+            resume.setOnClickListener(v -> playBook(continueBook, last.chapterIndex, last.positionMs));
+            root.addView(resume, fullButtonParams());
         }
 
-        List<Book> recent = recentBooks();
-        if (!recent.isEmpty()) {
-            root.addView(sectionTitle("Recent Books"));
-            for (int i = 0; i < Math.min(3, recent.size()); i++) root.addView(bookCard(recent.get(i), false));
-        }
+        TextView readyHeading = heading("Your Books", 20);
+        readyHeading.setPadding(0, dp(28), 0, dp(6));
+        root.addView(readyHeading);
+        for (NarrationUi.BookInput book : books) root.addView(bookCard(book));
 
-        root.addView(sectionTitle("All Imported Books"));
-        for (Book b : books) root.addView(bookCard(b, false));
         setContentView(scroll);
     }
 
-    private View sectionTitle(String title) {
-        TextView section = text(title, 18, Color.rgb(24, 27, 29), true);
-        section.setPadding(0, dp(25), 0, dp(1));
-        return section;
-    }
-
-    private View continueCard(Book b, ListeningProgressStore.Entry entry) {
+    private View bookCard(NarrationUi.BookInput book) {
         LinearLayout card = card();
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams outer = new LinearLayout.LayoutParams(-1, -2);
         outer.topMargin = dp(10);
         card.setLayoutParams(outer);
 
-        ImageView cover = new ImageView(this);
-        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap bm = bitmap(b.cover);
-        if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
-        card.addView(cover, new LinearLayout.LayoutParams(dp(90), dp(130)));
+        TextView title = heading(book.title, 18);
+        card.addView(title);
+        TextView author = text(book.author, 13, Color.rgb(101, 99, 94), false);
+        author.setPadding(0, dp(3), 0, dp(8));
+        card.addView(author);
 
-        LinearLayout meta = new LinearLayout(this);
-        meta.setOrientation(LinearLayout.VERTICAL);
-        meta.setPadding(dp(16), 0, 0, 0);
-        meta.addView(text(b.title, 18, Color.rgb(27, 29, 30), true));
-        TextView chapter = text("Chapter " + (entry.chapterIndex + 1) + " • " + entry.chapterTitle, 12, Color.rgb(105, 104, 99), false);
-        chapter.setPadding(0, dp(5), 0, dp(8));
-        meta.addView(chapter);
+        int ready = offlineChapterCount(book);
+        int total = book.chapters.size();
+        String status;
+        if (total == 0) status = "No readable chapters found.";
+        else if (ready >= total) status = "Ready to play offline. All " + total + " chapters are prepared.";
+        else if (ready > 0) status = ready + " of " + total + " chapters ready. Remaining chapters are preparing automatically.";
+        else if (new SecretStore(this).hasApiKey()) status = "Preparing automatically in the background. " + total + " chapters found.";
+        else status = "Narration setup required. " + total + " chapters found.";
+        TextView state = text(status, 14, ready > 0 ? Color.rgb(61, 99, 66) : Color.rgb(95, 93, 87), false);
+        state.setLineSpacing(0, 1.2f);
+        card.addView(state);
 
-        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(100);
-        bar.setProgress(ListeningProgressStore.percent(entry));
-        meta.addView(bar, new LinearLayout.LayoutParams(-1, dp(5)));
-        TextView percent = text(ListeningProgressStore.percent(entry) + "% of current chapter", 11, Color.rgb(126, 122, 113), false);
-        percent.setPadding(0, dp(5), 0, dp(8));
-        meta.addView(percent);
-        Button resume = button("▶  Resume Listening");
-        resume.setOnClickListener(v -> showNarration(b));
-        meta.addView(resume, new LinearLayout.LayoutParams(-1, -2));
-        card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
-        card.setOnClickListener(v -> showNarration(b));
-        return card;
-    }
-
-    private View bookCard(Book b, boolean offlineSection) {
-        LinearLayout card = card();
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams outer = new LinearLayout.LayoutParams(-1, -2);
-        outer.topMargin = dp(10);
-        card.setLayoutParams(outer);
-        ImageView cover = new ImageView(this);
-        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap bm = bitmap(b.cover);
-        if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
-        card.addView(cover, new LinearLayout.LayoutParams(dp(72), dp(104)));
-        LinearLayout meta = new LinearLayout(this);
-        meta.setOrientation(LinearLayout.VERTICAL);
-        meta.setPadding(dp(16), 0, 0, 0);
-        meta.addView(text(b.title, 17, Color.rgb(27, 29, 30), true));
-        TextView a = text(b.author, 13, Color.rgb(105, 104, 99), false);
-        a.setPadding(0, dp(5), 0, dp(7));
-        meta.addView(a);
-        int ready = offlineChapterCount(b);
-        String detail = b.chapters.size() + " chapters";
-        if (ready > 0) detail += " • " + ready + " offline";
-        TextView state = text(detail, 12, ready > 0 ? Color.rgb(69, 106, 74) : Color.rgb(126, 122, 113), false);
-        meta.addView(state);
-        if (offlineSection && ready == b.chapters.size() && ready > 0) {
-            TextView badge = text("✓ Whole book ready offline", 11, Color.rgb(69, 106, 74), true);
-            badge.setPadding(0, dp(5), 0, 0);
-            meta.addView(badge);
+        if (ready > 0 && canPlayAt(book, 0)) {
+            Button play = primaryButton("Play " + book.title);
+            play.setContentDescription("Play " + book.title + " from the beginning.");
+            LinearLayout.LayoutParams p = fullButtonParams();
+            p.topMargin = dp(12);
+            card.addView(play, p);
+            play.setOnClickListener(v -> playBook(book, 0, 0));
+        } else if (!new SecretStore(this).hasApiKey()) {
+            Button setup = primaryButton("Set up narration for " + book.title);
+            LinearLayout.LayoutParams p = fullButtonParams();
+            p.topMargin = dp(12);
+            card.addView(setup, p);
+            setup.setOnClickListener(v -> showAdvancedNarration(book));
         }
-        card.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
-        card.setOnClickListener(v -> showBookDetail(b));
+
+        Button details = secondaryButton("More options for " + book.title);
+        LinearLayout.LayoutParams d = fullButtonParams();
+        d.topMargin = dp(7);
+        card.addView(details, d);
+        details.setOnClickListener(v -> showBookDetail(book));
         return card;
     }
 
-    private List<Book> offlineBooks() {
-        List<Book> result = new ArrayList<>();
-        for (Book b : books) if (offlineChapterCount(b) > 0) result.add(b);
-        result.sort((a, b) -> Long.compare(b.file.lastModified(), a.file.lastModified()));
-        return result;
+    private void showBookDetail(NarrationUi.BookInput book) {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout root = column();
+        root.setPadding(dp(20), dp(20), dp(20), dp(40));
+        scroll.addView(root);
+        if (Build.VERSION.SDK_INT >= 28) root.setAccessibilityPaneTitle("Book options");
+
+        Button back = secondaryButton("Back to library");
+        back.setOnClickListener(v -> { loadLibrary(); showLibrary(); });
+        root.addView(back, fullButtonParams());
+
+        TextView title = heading(book.title, 26);
+        title.setPadding(0, dp(22), 0, dp(5));
+        root.addView(title);
+        root.addView(text(book.author, 15, Color.rgb(94, 92, 87), false));
+
+        int ready = offlineChapterCount(book);
+        int total = book.chapters.size();
+        TextView status = text(ready + " of " + total + " chapters ready for offline listening.", 14, Color.rgb(75, 74, 69), false);
+        status.setPadding(0, dp(10), 0, dp(12));
+        root.addView(status);
+
+        if (ready > 0 && canPlayAt(book, 0)) {
+            Button play = primaryButton("Play from beginning");
+            play.setOnClickListener(v -> playBook(book, 0, 0));
+            root.addView(play, fullButtonParams());
+        }
+
+        if (new SecretStore(this).hasApiKey() && ready < total) {
+            Button prepare = primaryButton("Prepare all chapters now");
+            LinearLayout.LayoutParams p = fullButtonParams();
+            p.topMargin = dp(8);
+            root.addView(prepare, p);
+            prepare.setOnClickListener(v -> {
+                NarrationGenerationService.enqueue(this, book.bookId);
+                Toast.makeText(this, "Preparing all chapters in the background", Toast.LENGTH_LONG).show();
+            });
+        }
+
+        Button narration = secondaryButton("Narration voice and advanced settings");
+        LinearLayout.LayoutParams n = fullButtonParams();
+        n.topMargin = dp(8);
+        root.addView(narration, n);
+        narration.setOnClickListener(v -> showAdvancedNarration(book));
+
+        TextView chapters = heading("Chapters", 20);
+        chapters.setPadding(0, dp(28), 0, dp(6));
+        root.addView(chapters);
+        for (int i = 0; i < book.chapters.size(); i++) {
+            NarrationUi.ChapterInput chapter = book.chapters.get(i);
+            int chapterIndex = i;
+            LinearLayout row = card();
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+            rp.topMargin = dp(7);
+            row.setLayoutParams(rp);
+            row.addView(text((i + 1) + ". " + chapter.title, 15, Color.rgb(42, 42, 39), true));
+            if (canPlayAt(book, i)) {
+                Button playChapter = secondaryButton("Play chapter " + (i + 1));
+                LinearLayout.LayoutParams cp = fullButtonParams();
+                cp.topMargin = dp(6);
+                row.addView(playChapter, cp);
+                playChapter.setOnClickListener(v -> playBook(book, chapterIndex, 0));
+            }
+            root.addView(row);
+        }
+        setContentView(scroll);
     }
 
-    private List<Book> recentBooks() {
-        List<Book> result = new ArrayList<>(books);
-        result.sort(Comparator.comparingLong((Book b) -> b.file.lastModified()).reversed());
-        return result;
+    private void showAdvancedNarration(NarrationUi.BookInput book) {
+        new NarrationUi(this, book, () -> showBookDetail(book)).show();
     }
 
-    private int offlineChapterCount(Book b) {
+    private void playBook(NarrationUi.BookInput book, int startChapter, long startPosition) {
+        NarrationSettings settings = new NarrationSettings(this);
+        AudioCache cache = new AudioCache(this);
+        int start = Math.max(0, Math.min(book.chapters.size() - 1, startChapter));
+        ArrayList<String> paths = new ArrayList<>();
+        ArrayList<String> titles = new ArrayList<>();
+        try {
+            for (int i = start; i < book.chapters.size(); i++) {
+                NarrationUi.ChapterInput chapter = book.chapters.get(i);
+                File audio = cache.fileFor(book.bookId, i, chapter.text, settings.voice(), settings.style());
+                if (!cache.isReady(audio)) break;
+                paths.add(audio.getAbsolutePath());
+                titles.add(chapter.title);
+            }
+        } catch (Exception ignored) { }
+        if (paths.isEmpty()) {
+            Toast.makeText(this, "This book is still being prepared", Toast.LENGTH_LONG).show();
+            return;
+        }
+        requestNotifications();
+        Intent intent = new Intent(this, PlaybackService.class).setAction(PlaybackService.ACTION_PLAY_QUEUE);
+        intent.putStringArrayListExtra(PlaybackService.EXTRA_PATHS, paths);
+        intent.putStringArrayListExtra(PlaybackService.EXTRA_TITLES, titles);
+        intent.putExtra(PlaybackService.EXTRA_BOOK_ID, book.bookId);
+        intent.putExtra(PlaybackService.EXTRA_BOOK_TITLE, book.title);
+        intent.putExtra(PlaybackService.EXTRA_AUTHOR, book.author);
+        intent.putExtra(PlaybackService.EXTRA_START_CHAPTER, start);
+        intent.putExtra(PlaybackService.EXTRA_START_POSITION, Math.max(0, startPosition));
+        intent.putExtra(PlaybackService.EXTRA_SPEED, settings.speed());
+        intent.putExtra(PlaybackService.EXTRA_MINUTES, settings.sleepMinutes());
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
+        announceForAccessibility("Playing " + book.title);
+    }
+
+    private boolean canPlayAt(NarrationUi.BookInput book, int chapterIndex) {
+        if (chapterIndex < 0 || chapterIndex >= book.chapters.size()) return false;
+        try {
+            NarrationSettings settings = new NarrationSettings(this);
+            NarrationUi.ChapterInput chapter = book.chapters.get(chapterIndex);
+            File audio = new AudioCache(this).fileFor(book.bookId, chapterIndex, chapter.text, settings.voice(), settings.style());
+            return new AudioCache(this).isReady(audio);
+        } catch (Exception ignored) { return false; }
+    }
+
+    private int offlineChapterCount(NarrationUi.BookInput book) {
         try {
             AudioCache cache = new AudioCache(this);
             NarrationSettings settings = new NarrationSettings(this);
             int ready = 0;
-            for (int i = 0; i < b.chapters.size(); i++) {
-                Chapter c = b.chapters.get(i);
-                File audio = cache.fileFor(b.fileName, i, c.text, settings.voice(), settings.style());
+            for (int i = 0; i < book.chapters.size(); i++) {
+                NarrationUi.ChapterInput chapter = book.chapters.get(i);
+                File audio = cache.fileFor(book.bookId, i, chapter.text, settings.voice(), settings.style());
                 if (cache.isReady(audio)) ready++;
             }
             return ready;
         } catch (Exception ignored) { return 0; }
     }
 
-    private Book findBookById(String bookId) {
+    private NarrationUi.BookInput findBook(String bookId) {
         if (bookId == null) return null;
-        for (Book b : books) if (bookId.equals(b.fileName)) return b;
+        for (NarrationUi.BookInput book : books) if (bookId.equals(book.bookId)) return book;
         return null;
     }
 
-    private void showBookDetail(Book b) {
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout root = column();
-        root.setPadding(dp(22), dp(20), dp(22), dp(40));
-        scroll.addView(root);
-        TextView back = text("‹  Library", 15, Color.rgb(86, 78, 62), true);
-        back.setPadding(0, dp(8), 0, dp(20));
-        back.setOnClickListener(v -> { loadLibrary(); showLibrary(); });
-        root.addView(back);
-        ImageView cover = new ImageView(this);
-        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        Bitmap bm = bitmap(b.cover);
-        if (bm != null) cover.setImageBitmap(bm); else cover.setBackgroundColor(Color.rgb(224, 216, 201));
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(154), dp(224));
-        cp.gravity = Gravity.CENTER_HORIZONTAL;
-        root.addView(cover, cp);
-        TextView title = text(b.title, 25, Color.rgb(24, 27, 29), true);
-        title.setGravity(Gravity.CENTER);
-        title.setPadding(0, dp(20), 0, dp(6));
-        root.addView(title);
-        TextView author = text(b.author, 14, Color.rgb(103, 101, 95), false);
-        author.setGravity(Gravity.CENTER);
-        root.addView(author);
-        int offline = offlineChapterCount(b);
-        TextView state = text(offline > 0 ? offline + "/" + b.chapters.size() + " chapters ready offline" : "Narration not downloaded yet", 12,
-                offline > 0 ? Color.rgb(69, 106, 74) : Color.rgb(112, 109, 103), false);
-        state.setGravity(Gravity.CENTER);
-        state.setPadding(0, dp(9), 0, 0);
-        root.addView(state);
-        Button narrate = button(offline > 0 ? "Listen / Narration settings" : "Set up narration");
-        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
-        np.topMargin = dp(20);
-        root.addView(narrate, np);
-        narrate.setOnClickListener(v -> showNarration(b));
-        TextView ch = text("Chapters", 18, Color.rgb(24, 27, 29), true);
-        ch.setPadding(0, dp(28), 0, dp(8));
-        root.addView(ch);
-        if (b.chapters.isEmpty()) root.addView(text("No readable chapters found", 13, Color.rgb(112, 109, 103), false));
-        for (int i = 0; i < b.chapters.size(); i++) {
-            Chapter c = b.chapters.get(i);
-            LinearLayout row = card();
-            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
-            rp.topMargin = dp(9);
-            row.setLayoutParams(rp);
-            row.addView(text((i + 1) + "  " + c.title, 15, Color.rgb(35, 36, 36), true));
-            String preview = c.text.length() > 110 ? c.text.substring(0, 110) + "…" : c.text;
-            TextView pv = text(preview, 12, Color.rgb(112, 109, 103), false);
-            pv.setPadding(0, dp(6), 0, 0);
-            pv.setLineSpacing(0, 1.2f);
-            row.addView(pv);
-            root.addView(row);
-        }
-        setContentView(scroll);
+    private boolean isIndexed(String fileName) {
+        return bookIndex != null && bookIndex.load().containsKey(fileName);
     }
 
-    private void showNarration(Book b) {
-        List<NarrationUi.ChapterInput> chapters = new ArrayList<>();
-        for (Chapter c : b.chapters) chapters.add(new NarrationUi.ChapterInput(c.title, c.text));
-        NarrationUi.BookInput input = new NarrationUi.BookInput(b.fileName, b.title, b.author, b.cover, chapters);
-        new NarrationUi(this, input, () -> showBookDetail(b)).show();
-    }
-
-    private Document xml(ZipFile zip, String path) throws Exception {
-        ZipEntry e = zip.getEntry(normalize(path));
-        if (e == null) throw new Exception("Missing " + path);
-        try (InputStream in = zip.getInputStream(e)) {
-            DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
-            f.setNamespaceAware(false);
-            try { f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true); } catch (Exception ignored) { }
-            return f.newDocumentBuilder().parse(in);
+    private void requestNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION);
         }
     }
 
-    private byte[] readEntry(ZipFile zip, String path, int max) throws Exception {
-        if (path == null) return null;
-        ZipEntry e = zip.getEntry(path);
-        if (e == null) return null;
-        try (InputStream in = zip.getInputStream(e); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[8192]; int n, total = 0;
-            while ((n = in.read(buf)) >= 0) {
-                total += n;
-                if (total > max) break;
-                out.write(buf, 0, n);
-            }
-            return out.toByteArray();
-        }
+    private File libraryDir() {
+        File dir = new File(getFilesDir(), "library");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
     }
 
-    private String firstText(Document d, String tag) {
-        NodeList n = d.getElementsByTagName(tag);
-        if (n.getLength() == 0 && tag.contains(":")) n = d.getElementsByTagName(tag.substring(tag.indexOf(':') + 1));
-        return n.getLength() > 0 ? n.item(0).getTextContent().trim() : null;
+    private File[] safeFiles(File dir) {
+        File[] files = dir.listFiles();
+        return files == null ? new File[0] : files;
     }
 
-    private String extractHeading(String html) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?is)<h[1-3][^>]*>(.*?)</h[1-3]>").matcher(html);
-        return m.find() ? htmlToText(m.group(1)) : null;
-    }
-
-    private String htmlToText(String html) {
-        return html.replaceAll("(?is)<script.*?</script>|<style.*?</style>", " ")
-                .replaceAll("(?i)<br\\s*/?>|</p>|</div>|</h[1-6]>", "\n")
-                .replaceAll("(?s)<[^>]+>", " ")
-                .replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-                .replace("&quot;", "\"").replace("&#39;", "'")
-                .replaceAll("[ \\t\\x0B\\f\\r]+", " ").replaceAll("\\n\\s*\\n+", "\n").trim();
-    }
-
-    private String normalize(String p) { try { return Uri.decode(p).replace("\\", "/"); } catch (Exception e) { return p; } }
-    private Bitmap bitmap(byte[] data) { try { return data == null ? null : BitmapFactory.decodeByteArray(data, 0, data.length); } catch (Exception e) { return null; } }
-    private File libraryDir() { File d = new File(getFilesDir(), "library"); if (!d.exists()) d.mkdirs(); return d; }
-    private File[] safeFiles(File d) { File[] f = d.listFiles(); return f == null ? new File[0] : f; }
-    private Book findBook(File f) { for (Book b : books) if (b.file.getAbsolutePath().equals(f.getAbsolutePath())) return b; return null; }
-
-    private String sha256(File f) throws Exception {
+    private String sha256(File file) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
-        try (InputStream in = new java.io.FileInputStream(f)) {
-            byte[] buf = new byte[65536]; int n;
-            while ((n = in.read(buf)) >= 0) md.update(buf, 0, n);
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            byte[] buffer = new byte[65536];
+            int n;
+            while ((n = in.read(buffer)) >= 0) md.update(buffer, 0, n);
         }
-        StringBuilder s = new StringBuilder();
-        for (byte x : md.digest()) s.append(String.format("%02x", x));
-        return s.toString();
+        StringBuilder result = new StringBuilder();
+        for (byte value : md.digest()) result.append(String.format(Locale.US, "%02x", value));
+        return result.toString();
     }
 
     private String displayName(Uri uri) {
-        ContentResolver r = getContentResolver();
-        try (Cursor c = r.query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-            if (c != null && c.moveToFirst()) {
-                int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                if (i >= 0) return c.getString(i);
+        ContentResolver resolver = getContentResolver();
+        try (Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index >= 0) return cursor.getString(index);
             }
         } catch (Exception ignored) { }
         return uri.getLastPathSegment();
     }
 
     private File uniqueFile(File dir, String name) {
-        File c = new File(dir, name);
-        if (!c.exists()) return c;
+        File candidate = new File(dir, name);
+        if (!candidate.exists()) return candidate;
         int dot = name.lastIndexOf('.');
-        String base = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : "";
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
         for (int i = 2; i < 10000; i++) {
-            c = new File(dir, base + " (" + i + ")" + ext);
-            if (!c.exists()) return c;
+            candidate = new File(dir, base + " (" + i + ")" + ext);
+            if (!candidate.exists()) return candidate;
         }
         return new File(dir, System.currentTimeMillis() + "-" + name);
     }
 
-    private boolean empty(String s) { return s == null || s.trim().isEmpty(); }
-    private String stripExtension(String n) { int d = n.lastIndexOf('.'); return d > 0 ? n.substring(0, d) : n; }
-
     private LinearLayout column() {
-        LinearLayout v = new LinearLayout(this);
-        v.setOrientation(LinearLayout.VERTICAL);
-        v.setBackgroundColor(Color.rgb(247, 244, 237));
-        return v;
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(Color.rgb(247, 244, 237));
+        return layout;
     }
 
     private LinearLayout card() {
-        LinearLayout v = new LinearLayout(this);
-        v.setOrientation(LinearLayout.VERTICAL);
-        v.setPadding(dp(17), dp(17), dp(17), dp(17));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(255, 253, 249));
-        bg.setCornerRadius(dp(22));
-        bg.setStroke(dp(1), Color.rgb(226, 219, 206));
-        v.setBackground(bg);
-        v.setElevation(dp(1));
-        return v;
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(17), dp(17), dp(17), dp(17));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(255, 253, 249));
+        background.setCornerRadius(dp(18));
+        background.setStroke(dp(1), Color.rgb(226, 219, 206));
+        layout.setBackground(background);
+        return layout;
     }
 
-    private Button button(String s) {
-        Button b = new Button(this);
-        b.setText(s);
-        b.setTextSize(13);
-        b.setAllCaps(false);
-        b.setTextColor(Color.WHITE);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(48, 48, 43));
-        bg.setCornerRadius(dp(18));
-        b.setBackground(bg);
-        return b;
+    private Button primaryButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(16);
+        button.setTextColor(Color.WHITE);
+        button.setMinHeight(dp(56));
+        button.setContentDescription(label);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(48, 48, 43));
+        background.setCornerRadius(dp(16));
+        button.setBackground(background);
+        return button;
     }
 
-    private TextView text(String s, float z, int c, boolean bold) {
-        TextView v = new TextView(this);
-        v.setText(s);
-        v.setTextSize(z);
-        v.setTextColor(c);
-        v.setGravity(Gravity.START);
-        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        return v;
+    private Button secondaryButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(15);
+        button.setTextColor(Color.rgb(42, 42, 39));
+        button.setMinHeight(dp(52));
+        button.setContentDescription(label);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(239, 234, 224));
+        background.setCornerRadius(dp(15));
+        button.setBackground(background);
+        return button;
     }
 
-    private int dp(float v) { return Math.round(v * getResources().getDisplayMetrics().density); }
-
-    static class Book {
-        File file;
-        String fileName, title, author;
-        byte[] cover;
-        List<Chapter> chapters = new ArrayList<>();
-        static Book fallback(File f, String savedTitle, String savedAuthor) {
-            Book b = new Book();
-            b.file = f;
-            b.fileName = f.getName();
-            b.title = savedTitle == null || savedTitle.trim().isEmpty() ? f.getName().replaceFirst("(?i)\\.epub$", "") : savedTitle;
-            b.author = savedAuthor == null || savedAuthor.trim().isEmpty() ? "Unknown author" : savedAuthor;
-            return b;
-        }
+    private LinearLayout.LayoutParams fullButtonParams() {
+        return new LinearLayout.LayoutParams(-1, -2);
     }
 
-    static class Chapter {
-        String title, text, path;
-        Chapter(String t, String x, String p) { title = t; text = x; path = p; }
+    private TextView heading(String value, float size) {
+        TextView view = text(value, size, Color.rgb(24, 27, 29), true);
+        if (Build.VERSION.SDK_INT >= 28) view.setAccessibilityHeading(true);
+        return view;
+    }
+
+    private TextView text(String value, float size, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setGravity(Gravity.START);
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return view;
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private static boolean empty(String value) {
+        return value == null || value.trim().isEmpty();
     }
 }
