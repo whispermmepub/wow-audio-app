@@ -4,140 +4,138 @@ Use this repository as the source of truth:
 
 `whispermmepub/wow-audio-app`
 
-## Current verified state
+## Current repository state
 
 - Android application id: `com.whisper.wowaudio`
 - minSdk 23, target/compile SDK 36
-- Current starter version: `0.1.0` / versionCode `1`
-- CI builds debug + unsigned release and runs release lint successfully.
-- The app already receives a book from WoW Reader using:
-  - action `com.whisper.wowaudio.action.OPEN_BOOK`
-  - EPUB MIME `application/epub+zip`
-  - PDF MIME `application/pdf`
-  - temporary read-only `content://` grant
-- Incoming books are immediately copied into WoW Audio private `files/library` storage, preserving the display filename when possible.
-- The current screen is only a starter/receiver UI. AI narration is NOT implemented yet.
+- Current test version: `0.2.0` / versionCode `2`
+- CI builds debug + unsigned release, runs release lint, verifies the Reader handoff contract, and verifies APK identity.
+- Stable WoW Reader action remains `com.whisper.wowaudio.action.OPEN_BOOK`.
+- Reader EPUB/PDF MIME contract remains `application/epub+zip` / `application/pdf`.
+- Incoming Reader `content://` URIs are copied immediately into private `files/library` storage.
+- Reader title/author extras remain `wow_book_title` / `wow_book_author`.
 
-### End-to-end handoff has been tested on a real device
+## Real-device integration already verified
 
-The user installed WoW Reader v61 and the WoW Audio starter APK and verified this exact flow:
+The original WoW Reader v61 → WoW Audio handoff was tested on a real device:
 
-1. In WoW Reader, long-press/open the per-book action popup.
-2. `🎧 Open in WoW Audio` appears alongside the existing book actions.
-3. Tapping it opens WoW Audio.
-4. WoW Audio displays `✓ Book received`.
-5. The Burmese book title/author and EPUB filename arrive correctly.
+1. Open the Reader per-book actions.
+2. Tap `🎧 Open in WoW Audio`.
+3. WoW Audio opens.
+4. The EPUB is received and copied.
+5. Burmese title, author and filename arrive correctly.
 
-This cross-app receiver/handoff is working and should be preserved while building the real audiobook app.
+Preserve this cross-app contract. Do not modify WoW Reader unless both apps truly need a coordinated contract change.
 
-## WoW Reader side
-
-WoW Reader integration is prepared separately on branch:
+Reader integration branch historically used:
 
 `whispermmepub/wow-reader-lab` → `feature/v61-wow-audio-handoff`
 
-Reader v61 / 2.19.1 adds `🎧 Open in WoW Audio` to the existing per-book action popup for EPUB/PDF. It does not add a persistent reader bottom bar or disturb the existing reading UI. It sends title + author metadata and a temporary read-only FileProvider URI specifically to package `com.whisper.wowaudio`.
+## Features implemented after the starter
 
-The v61 branch CI/build/lint/identity verification passed. Keep this intent contract stable unless both apps are updated together.
+### Library and standalone EPUB import
 
-## Standalone import requirement
+- Premium audiobook-first Library/Home shell.
+- `Add Book / Import EPUB` system file picker.
+- Android ACTION_VIEW / ACTION_SEND import support for Files, Downloads and Telegram flows.
+- ACTION_SEND also accepts `ClipData` fallback.
+- Private app-library copy pipeline.
+- SHA-256 duplicate detection.
+- Original filename preservation with collision-safe naming.
 
-WoW Audio must also work independently of WoW Reader.
+### EPUB data model
 
-Add normal Android import/open paths so a user can:
+- OPF metadata parsing.
+- Cover extraction.
+- Spine-order readable chapter extraction.
+- Robust relative EPUB path handling including `../`, fragments and query components.
+- EPUB3 NAV chapter titles.
+- EPUB2 NCX chapter titles.
+- Heading and numbered fallback chapter titles.
+- Persistent `library-index.json` book metadata.
+- Reader-supplied Burmese title/author persists across app reloads.
 
-- tap `Add Book` / `Import EPUB` inside WoW Audio and choose an `.epub` from the system file picker;
-- use Android `Open with` / share/open flows from Files, Downloads, Telegram, etc.;
-- import the file into WoW Audio private storage using the same safe import pipeline as the WoW Reader handoff.
+### Book Detail
 
-WoW Reader is an optional companion, not a requirement for using WoW Audio.
+- Cover, title, author and chapter list.
+- Chapter text previews.
+- Narration/offline-audio entry point.
 
-EPUB is the priority for v1. PDF support may follow after EPUB narration is excellent, although the current handoff receiver already accepts PDF.
+### BYOK Gemini TTS
 
-## Product direction
+- Current official model used by this branch: `gemini-3.1-flash-tts-preview`.
+- Current Interactions REST endpoint: `https://generativelanguage.googleapis.com/v1beta/interactions`.
+- Current schema uses `response_format: {"type":"audio"}` and `generation_config.speech_config`.
+- `Api-Revision: 2026-05-20` is sent.
+- Burmese is supported by current official Gemini TTS docs (`my`).
+- User API key is encrypted with Android Keystore AES-GCM and remains device-local.
+- No shared WoW owner-paid API key or quota.
+- Saved API key can be explicitly removed in the UI.
+- Voice picker and custom narration direction.
+- Long chapter text is split into conservative punctuation-aware chunks.
+- Transient 408/429/5xx Gemini failures use bounded retry/backoff.
+- Audio is written as private WAV files.
 
-Build WoW Audio as a separate premium audiobook app. UI/UX quality is a core requirement: modern, polished, clean, smooth, visually strong, and comparable to the approved mockups from the prior conversation. Avoid generic Android demo UI.
+### Offline audio and playback
 
-Primary use case:
+- Deterministic cache key includes book/chapter text/voice/style, preventing unnecessary repeated generation for unchanged settings.
+- Generate one chapter or generate the whole book sequentially.
+- Cached chapter status and total cache size shown in UI.
+- Clear offline audio cache control.
+- Continuous playback across consecutive cached chapters.
+- Android foreground media playback service.
+- MediaSession / notification / lock-screen controls.
+- Play/pause, ±15 second seek, previous/next chapter.
+- Playback speed preferences from 0.8× through 2.0×.
+- Sleep timer choices including 15/30/45/60/90 minutes.
 
-**Myanmar EPUB → natural Myanmar AI audiobook**
+## Current development branch
 
-### TTS model strategy
+Active TTS/playback branch:
 
-- BYOK only: user provides their own Gemini API key.
-- No shared WoW API key, shared quota, or owner-paid WoW TTS service.
-- Never commit or upload user API keys.
-- Store API keys device-locally and exclude them from app/library backup flows where appropriate.
-- Before implementation, verify the current Google/Gemini TTS model names, API method, Burmese support, voice list, quotas, limits, and pricing from official Google docs; these can change.
-- Android/Google on-device system TTS should NOT be assumed to provide Burmese.
+`feature/gemini-byok-tts-playback`
 
-### Required v1 audiobook features
+The branch is intended to be merged only after its final v0.2.0 build/lint/APK identity CI is green.
 
-1. Import/open EPUB from WoW Reader and normal Android file picker/open/share flows.
-2. Parse EPUB metadata, cover, spine/chapters, and readable text.
-3. Myanmar speech text normalization before TTS:
-   - Myanmar punctuation and pauses
-   - Myanmar digits/numbers/dates/times/percentages
-   - common abbreviations
-   - mixed Myanmar/English names and acronyms where practical
-   - remove hidden/navigation/HTML noise
-4. Gemini TTS BYOK setup:
-   - API key entry
-   - test connection
-   - voice picker using voices actually supported by the live API
-   - preview/sample voice
-5. Narration styles such as Natural, Warm, Calm, Storyteller, Dramatic, Soft, Bedtime, plus Custom style prompt if supported.
-6. Playback speed controls.
-7. Read current chapter or whole book continuously across chapters.
-8. Pre-generate/queue upcoming chunks so playback does not pause between normal chunks/chapters.
-9. Sentence-follow highlighting synchronized to the currently playing chunk/sentence.
-10. Background playback + Android MediaSession/notification/lock-screen controls.
-11. 15-second rewind/forward, previous/next chapter, sleep timer, and playback speed.
-12. Offline listening by caching/downloading generated audio. Generated audio should be keyed by book/text/voice/style/settings so unchanged audio is reused instead of repeatedly consuming API quota.
-13. Library/Home UX: Continue Listening, Imported Books, Downloaded/Offline, recent books.
-14. Book detail: cover, title, author, chapter list, narration/download state.
-15. Proper error/retry UX for invalid key, quota exhausted, network loss, unsupported content, and interrupted whole-book generation.
+## Validation boundary
 
-## Future — do not block v1 on this
+Do not claim live Gemini narration is verified merely because CI is green.
 
-- Custom/My Voice for Burmese narration if a suitable licensed/allowed voice-cloning path becomes available.
-- Offline native Myanmar TTS model only when licensing, quality, app size, and device performance are acceptable.
-- PDF narration can follow after EPUB is excellent.
+CI can verify:
+- Android compilation
+- unsigned release build
+- release lint
+- APK identity/version
+- static Reader handoff contract
 
-## UI/UX principles
+A real Gemini narration request requires the user's own API key and a real-device/network test. The assistant does not have the user's key and must not put any key into GitHub.
 
-- Premium audiobook-first design, not a copy of WoW Reader.
-- The current starter screen is NOT the target final design; it is only proof that handoff works.
-- UI/UX must look intentionally designed, premium and modern, like the approved mockups from the prior conversation.
-- Excellent Myanmar typography is mandatory.
-- Home should feel like a real audiobook library, with strong cover presentation and clear hierarchy.
-- Add Book/import should be obvious and quick.
-- Book Detail should show cover, title, author, chapters, narration/download state, and a strong primary action.
-- Now Playing should have large cover art, clear controls, voice/style/speed access, chapter navigation, sleep timer, and download/offline status.
-- Smooth sheets, cards, transitions, progress states, download states, skeleton/loading states.
-- Light/dark themes should be intentional, not default system-looking screens.
-- No permanent clutter over reading text if a text-follow screen is used.
-- The WoW Reader handoff should feel instant: select `Open in WoW Audio` → WoW Audio opens → imported book appears ready for narration setup/playback.
+## Still intentionally future
 
-## Development safety
+Do not block v0.2.0 on these:
 
-- Do feature work on branches; do not casually overwrite stable `main` once the app becomes usable.
-- Do not modify WoW Reader unless explicitly required for the cross-app contract.
-- Preserve the working receiver while refactoring the app architecture.
-- Keep signing keys, API keys, OAuth credentials, and recovery material out of GitHub.
-- Keep CI artifact retention short to avoid Actions storage buildup.
-- Do not claim a feature works until it is built/tested.
+- Accurate sentence-follow highlighting synchronized to real audio timing. Do not fake timing.
+- Custom/My Voice or voice cloning.
+- Production-quality PDF narration.
+- Native/offline Myanmar TTS model.
 
-## First task in a new chat
+## Important implementation caveat
 
-Read this handoff and audit the current repository before changing anything.
+Current whole-book generation runs sequentially from the narration UI process and writes each completed chapter to the durable private cache. Completed chapters survive interruption, but an active generation job is not yet a resumable Android WorkManager/foreground-generation job. If process-kill resilience becomes a priority, add a persistent/resumable generation queue without changing the Reader handoff contract.
 
-Then create the first real WoW Audio feature branch and build, in this order:
+## Security and development safety
 
-1. A polished premium Library/Home screen.
-2. Standalone `Add Book / Import EPUB` using Android's file picker, while preserving the already-working WoW Reader receiver.
-3. A proper EPUB import/data model: metadata, cover, spine, chapters, readable text, duplicate handling.
-4. A polished Book Detail screen with chapter list and clear narration setup entry point.
-5. Only after import/data/library are stable, implement BYOK Gemini TTS and playback.
+- Never commit API keys, signing keys, OAuth credentials or recovery secrets.
+- Keep user Gemini keys device-local.
+- Keep CI artifact retention short.
+- Do feature work on branches and merge only after green CI.
+- Preserve the already-working Reader receiver while refactoring.
+- Do not claim a feature works until the relevant build/test exists.
 
-Do not spend the first turn re-explaining the product. Inspect the repo and start doing the work.
+## Next task in a future chat
+
+1. Read this file and inspect `main` before changing anything.
+2. If v0.2.0 has not yet been merged, verify the active TTS branch CI and finish that merge first.
+3. If it is merged, begin with real-device validation using a user-provided BYOK key entered only in the app UI.
+4. Fix live API/playback issues found in that test before adding new scope.
+5. Only after live narration is stable, consider resumable whole-book generation, premium Now Playing polish, and accurate sentence-follow timing.
