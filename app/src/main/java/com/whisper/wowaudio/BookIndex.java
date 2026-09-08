@@ -59,7 +59,7 @@ final class BookIndex {
             committed = true;
         } catch (Exception ignored) { }
 
-        if (committed && new SecretStore(context).hasApiKey()) {
+        if (committed && new NarrationSettings(context).narrationAvailable()) {
             try { NarrationGenerationService.enqueue(context, entry.fileName); }
             catch (Exception ignored) { }
         }
