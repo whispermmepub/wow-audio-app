@@ -59,7 +59,10 @@ final class BookIndex {
             committed = true;
         } catch (Exception ignored) { }
 
-        if (committed && new SecretStore(context).hasApiKey()) {
+        if (committed) {
+            // Always queue the import. If no voice is configured yet the engine records
+            // a setup-required state and shows an accessible setup notification. Once
+            // eSpeak or Gemini becomes available, reconciliation resumes this same book.
             try { NarrationGenerationService.enqueue(context, entry.fileName); }
             catch (Exception ignored) { }
         }

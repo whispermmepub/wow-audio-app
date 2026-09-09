@@ -9,14 +9,17 @@ import java.security.MessageDigest;
 final class AudioCache {
     private static final String CACHE_VERSION = "v2-normalized-follow";
     private final File root;
+    private final Context context;
 
     AudioCache(Context context) {
-        root = new File(context.getFilesDir(), "audio-cache");
+        this.context = context.getApplicationContext();
+        root = new File(this.context.getFilesDir(), "audio-cache");
         if (!root.exists()) root.mkdirs();
     }
 
     File fileFor(String bookId, int chapterIndex, String text, String voice, String style) throws Exception {
-        String material = CACHE_VERSION + "\n" + safe(bookId) + "\n" + chapterIndex + "\n" + safe(voice) + "\n" + safe(style) + "\n" + safe(text);
+        String cacheVoice = normalizeVoiceKey(voice);
+        String material = CACHE_VERSION + "\n" + safe(bookId) + "\n" + chapterIndex + "\n" + cacheVoice + "\n" + safe(style) + "\n" + safe(text);
         String hash = sha256(material);
         File bookDir = new File(root, sha256(safe(bookId)).substring(0, 16));
         if (!bookDir.exists()) bookDir.mkdirs();
@@ -30,6 +33,15 @@ final class AudioCache {
     long totalBytes() { return size(root); }
 
     void clear() { deleteChildren(root); }
+
+    private String normalizeVoiceKey(String requested) {
+        if (OfflineBurmeseTtsClient.ENGINE_ID.equals(requested)) return requested;
+        try {
+            NarrationSettings settings = new NarrationSettings(context);
+            if (settings.useOfflineEngine()) return OfflineBurmeseTtsClient.ENGINE_ID;
+        } catch (Exception ignored) { }
+        return safe(requested);
+    }
 
     private static long size(File f) {
         if (f == null || !f.exists()) return 0;

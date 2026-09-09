@@ -24,13 +24,20 @@ final class NarrationNotificationHelper {
 
     static Notification build(Context context, String title, String text, int progress, int max, boolean ongoing) {
         ensureChannel(context);
-        Intent open = new Intent(context, MainActivity.class)
-                .setAction(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        boolean setupNeeded = isSetupMessage(title, text);
+        Intent open;
+        if (setupNeeded) {
+            open = new Intent(context, OfflineVoiceSetupActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        } else {
+            open = new Intent(context, MainActivity.class)
+                    .setAction(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        }
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent content = PendingIntent.getActivity(context, 0, open, flags);
+        PendingIntent content = PendingIntent.getActivity(context, setupNeeded ? 4202 : 0, open, flags);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(context, CHANNEL)
                 : new Notification.Builder(context);
@@ -42,6 +49,7 @@ final class NarrationNotificationHelper {
                 .setOnlyAlertOnce(true)
                 .setOngoing(ongoing)
                 .setVisibility(Notification.VISIBILITY_PUBLIC);
+        if (setupNeeded) builder.setAutoCancel(true);
         if (max > 0) builder.setProgress(max, Math.max(0, Math.min(max, progress)), false);
         else if (ongoing) builder.setProgress(0, 0, true);
         return builder.build();
@@ -50,5 +58,13 @@ final class NarrationNotificationHelper {
     static void notify(Context context, String title, String text, int progress, int max, boolean ongoing) {
         ((NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE))
                 .notify(NOTIFICATION_ID, build(context, title, text, progress, max, ongoing));
+    }
+
+    private static boolean isSetupMessage(String title, String text) {
+        String value = ((title == null ? "" : title) + " " + (text == null ? "" : text)).toLowerCase(java.util.Locale.US);
+        return value.contains("setup needed")
+                || value.contains("setup required")
+                || value.contains("offline burmese voice needed")
+                || value.contains("install espeak");
     }
 }

@@ -35,8 +35,10 @@ final class NarrationWorkScheduler {
 
     private static void enqueue(Context context, long delayMs, ExistingWorkPolicy policy) {
         if (context == null) return;
+        Context app = context.getApplicationContext();
+        boolean offline = new NarrationSettings(app).useOfflineEngine();
         Constraints constraints = new Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiredNetworkType(offline ? NetworkType.NOT_REQUIRED : NetworkType.CONNECTED)
                 .setRequiresStorageNotLow(true)
                 .build();
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(NarrationRecoveryWorker.class)
@@ -44,8 +46,7 @@ final class NarrationWorkScheduler {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
                 .addTag(UNIQUE_WORK);
         if (delayMs > 0) builder.setInitialDelay(delayMs, TimeUnit.MILLISECONDS);
-        WorkManager.getInstance(context.getApplicationContext())
-                .enqueueUniqueWork(UNIQUE_WORK, policy, builder.build());
+        WorkManager.getInstance(app).enqueueUniqueWork(UNIQUE_WORK, policy, builder.build());
     }
 
     static void cancel(Context context) {
