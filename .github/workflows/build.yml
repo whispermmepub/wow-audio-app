@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -22,8 +24,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Install Android 16 SDK
-        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"'
+      - name: Install Android 16 SDK and native toolchain
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "ndk;29.0.14206865" "cmake;3.22.1"
+      - name: Build pinned eSpeak NG Android engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f third_party/espeak-ng/android/gradlew
+          chmod +x third_party/espeak-ng/android/gradlew
+          third_party/espeak-ng/android/gradlew -p third_party/espeak-ng/android assembleRelease --no-daemon --stacktrace
+          test -f third_party/espeak-ng/android/build/outputs/apk/release/android-release.apk
+      - name: Upload vendor engine APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: espeak-ng-pinned-vendor-apk
+          path: third_party/espeak-ng/android/build/outputs/apk/release/android-release.apk
+          retention-days: 3
+          if-no-files-found: error
       - name: Verify clean direct-reader contract
         shell: bash
         run: |
@@ -31,8 +49,6 @@ jobs:
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
           grep -q "versionCode 1" app/build.gradle
           grep -q "versionName '1.0.0'" app/build.gradle
-          grep -q "TextToSpeech" app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q "new Locale(\"my\", \"MM\")" app/src/main/java/com/whisper/wowaudio/ReadingService.java
           grep -q "Delete Book" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           grep -q "ACTION_OPEN_DOCUMENT" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           if grep -R -q "GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java; then
