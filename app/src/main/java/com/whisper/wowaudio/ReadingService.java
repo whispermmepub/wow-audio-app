@@ -117,22 +117,28 @@ public final class ReadingService extends Service {
             if (token != generation || tts == null) return;
             if (status != TextToSpeech.SUCCESS) {
                 if (usingSmEngine) {
-                    // A broken/incomplete SM installation must not kill WoW Audio. Try another
-                    // installed engine that genuinely exposes my-MM, then show a useful error.
-                    usingSmEngine = false;
-                    runOnServiceThread(() -> initTts(token, false));
+                    unavailable("SM Myanmar TTS is installed but could not start. Repair or reinstall the full SM Myanmar TTS app.");
                 } else {
-                    unavailable("Myanmar text-to-speech could not start. Install or repair SM Myanmar TTS.");
+                    unavailable("Myanmar text-to-speech could not start. Install SM Myanmar TTS.");
                 }
                 return;
             }
             configureMyanmarVoice(token);
         };
 
-        if (requestSmEngine) {
-            tts = new TextToSpeech(getApplicationContext(), listener, SM_ENGINE_PACKAGE);
-        } else {
-            tts = new TextToSpeech(getApplicationContext(), listener);
+        try {
+            if (requestSmEngine) {
+                tts = new TextToSpeech(getApplicationContext(), listener, SM_ENGINE_PACKAGE);
+            } else {
+                tts = new TextToSpeech(getApplicationContext(), listener);
+            }
+        } catch (RuntimeException e) {
+            tts = null;
+            ttsReady = false;
+            paused = true;
+            unavailable(requestSmEngine
+                    ? "SM Myanmar TTS failed while starting. WoW Audio stayed open. Repair or reinstall SM Myanmar TTS."
+                    : "The phone TTS engine failed while starting.");
         }
     }
 
@@ -140,41 +146,53 @@ public final class ReadingService extends Service {
         if (token != generation || tts == null) return;
 
         Locale myanmar = new Locale("my", "MM");
-        int available = tts.isLanguageAvailable(myanmar);
-        if (available < TextToSpeech.LANG_AVAILABLE) available = tts.isLanguageAvailable(new Locale("my"));
-
-        if (available < TextToSpeech.LANG_AVAILABLE) {
-            if (usingSmEngine) {
-                // Some third-party engines report language availability imperfectly. Try the
-                // language selection once before considering the engine unusable.
-                int direct = tts.setLanguage(myanmar);
-                if (direct < TextToSpeech.LANG_AVAILABLE) direct = tts.setLanguage(new Locale("my"));
-                if (direct < TextToSpeech.LANG_AVAILABLE) {
-                    usingSmEngine = false;
-                    runOnServiceThread(() -> initTts(token, false));
-                    return;
-                }
-            } else {
-                unavailable("No Myanmar voice is available. Install SM Myanmar TTS and try Play again.");
-                return;
+        int available;
+        try {
+            available = tts.isLanguageAvailable(myanmar);
+            if (available < TextToSpeech.LANG_AVAILABLE) {
+                available = tts.isLanguageAvailable(new Locale("my"));
             }
-        } else {
-            int result = tts.setLanguage(myanmar);
-            if (result < TextToSpeech.LANG_AVAILABLE) result = tts.setLanguage(new Locale("my"));
-            if (result < TextToSpeech.LANG_AVAILABLE) {
-                if (usingSmEngine) {
-                    usingSmEngine = false;
-                    runOnServiceThread(() -> initTts(token, false));
-                } else {
-                    unavailable("Myanmar voice could not be selected.");
-                }
-                return;
-            }
+        } catch (RuntimeException e) {
+            unavailable(usingSmEngine
+                    ? "SM Myanmar TTS failed while checking Burmese support."
+                    : "Myanmar voice check failed.");
+            return;
         }
 
-        tts.setSpeechRate(1.0f);
-        tts.setPitch(1.0f);
-        tts.setOnUtteranceProgressListener(listener(token));
+        int result;
+        try {
+            result = tts.setLanguage(myanmar);
+            if (result < TextToSpeech.LANG_AVAILABLE) result = tts.setLanguage(new Locale("my"));
+        } catch (RuntimeException e) {
+            unavailable(usingSmEngine
+                    ? "SM Myanmar TTS failed while selecting Burmese."
+                    : "Myanmar voice could not be selected.");
+            return;
+        }
+
+        // Some third-party engines report isLanguageAvailable imperfectly, so setLanguage is
+        // the final authority. If both checks fail, do not repeatedly bind the same broken
+        // preferred engine as a fallback.
+        if (available < TextToSpeech.LANG_AVAILABLE && result < TextToSpeech.LANG_AVAILABLE) {
+            unavailable(usingSmEngine
+                    ? "SM Myanmar TTS does not expose a working Burmese voice on this installation."
+                    : "No working Myanmar voice is available. Install SM Myanmar TTS.");
+            return;
+        }
+        if (result < TextToSpeech.LANG_AVAILABLE) {
+            unavailable("Myanmar voice could not be selected.");
+            return;
+        }
+
+        try {
+            tts.setSpeechRate(1.0f);
+            tts.setPitch(1.0f);
+            tts.setOnUtteranceProgressListener(listener(token));
+        } catch (RuntimeException e) {
+            unavailable("Myanmar voice setup failed: " + safeMessage(e));
+            return;
+        }
+
         ttsReady = true;
         paused = false;
         broadcast(usingSmEngine ? "SM Myanmar TTS ready" : "Myanmar voice ready", false);
@@ -209,7 +227,7 @@ public final class ReadingService extends Service {
                 paused = true;
                 saveProgress();
                 String message = usingSmEngine
-                        ? "SM Myanmar TTS stopped. Tap Resume to retry. If it repeats, repair or reinstall the full SM Myanmar TTS app."
+                        ? "SM Myanmar TTS stopped. Tap Resume to retry."
                         : "Speech stopped. Tap Resume to try again.";
                 broadcast(message, false);
                 updateNotification("Speech stopped • tap Resume", false);
@@ -250,7 +268,16 @@ public final class ReadingService extends Service {
         }
         paused = false;
         String utterance = book.id + ":" + chunkIndex + ":" + token;
-        int result = tts.speak(piece, TextToSpeech.QUEUE_FLUSH, null, utterance);
+        final int result;
+        try {
+            result = tts.speak(piece, TextToSpeech.QUEUE_FLUSH, null, utterance);
+        } catch (RuntimeException e) {
+            paused = true;
+            saveProgress();
+            broadcast("SM Myanmar TTS failed while reading. WoW Audio stayed open.", false);
+            updateNotification("Speech engine failed • tap Resume", false);
+            return;
+        }
         if (result == TextToSpeech.ERROR) {
             paused = true;
             saveProgress();
@@ -263,7 +290,9 @@ public final class ReadingService extends Service {
     }
 
     private void pauseReading() {
-        if (tts != null) tts.stop();
+        if (tts != null) {
+            try { tts.stop(); } catch (RuntimeException ignored) { }
+        }
         paused = true;
         saveProgress();
         broadcast("Paused", false);
@@ -298,8 +327,8 @@ public final class ReadingService extends Service {
 
     private void stopTtsOnly() {
         if (tts != null) {
-            try { tts.stop(); } catch (Exception ignored) { }
-            try { tts.shutdown(); } catch (Exception ignored) { }
+            try { tts.stop(); } catch (RuntimeException ignored) { }
+            try { tts.shutdown(); } catch (RuntimeException ignored) { }
         }
         tts = null;
         ttsReady = false;
