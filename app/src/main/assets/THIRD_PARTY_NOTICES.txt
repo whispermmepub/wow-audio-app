@@ -1,0 +1,22 @@
+WoW Audio — Third-party notices
+
+WoW Audio is a free, non-commercial accessibility app.
+
+Meta MMS-TTS Burmese (facebook/mms-tts-mya)
+Copyright/model publisher: Meta / Facebook AI Research
+License: Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+Model: https://huggingface.co/facebook/mms-tts-mya
+License: https://creativecommons.org/licenses/by-nc/4.0/
+
+Sherpa-compatible ONNX conversion used in this build:
+https://huggingface.co/willwade/mms-tts-multilingual-models-onnx
+Pinned model revision: d0f3eabab69a178ad836f5689044998909c88ae7
+The underlying MMS model remains CC BY-NC 4.0.
+
+sherpa-onnx 1.13.7
+Copyright k2-fsa / contributors
+License: Apache License 2.0
+Source: https://github.com/k2-fsa/sherpa-onnx
+License: https://www.apache.org/licenses/LICENSE-2.0
+
+No endorsement by Meta, Hugging Face, willwade, or k2-fsa is implied.
