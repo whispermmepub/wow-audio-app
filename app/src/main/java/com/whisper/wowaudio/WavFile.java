@@ -43,7 +43,8 @@ final class WavFile {
             byte[] buffer = new byte[64 * 1024];
             int pos = 0;
             for (float sample : samples) {
-                float v = Float.isFinite(sample) ? Math.max(-1.0f, Math.min(1.0f, sample)) : 0.0f;
+                boolean finite = !Float.isNaN(sample) && !Float.isInfinite(sample);
+                float v = finite ? Math.max(-1.0f, Math.min(1.0f, sample)) : 0.0f;
                 short pcm = (short) Math.round(v * 32767.0f);
                 buffer[pos++] = (byte) (pcm & 0xff);
                 buffer[pos++] = (byte) ((pcm >>> 8) & 0xff);
