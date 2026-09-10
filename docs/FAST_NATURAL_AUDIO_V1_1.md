@@ -3,46 +3,72 @@
 ## Product contract
 
 The user experience must be: import EPUB/TXT -> press Play -> hear Burmese quickly.
-No per-chapter generate buttons, no waiting for the whole book, and no deleting already-generated audio immediately after playback.
+No per-chapter Generate button. No waiting for the whole book. Previously heard audio must remain seekable.
 
-## Primary voice
+## Non-negotiable deployment rule
 
-Online neural Burmese is the primary path. The first implementation target is Azure Speech standard Burmese neural voices:
-- my-MM-NilarNeural (default)
-- my-MM-ThihaNeural (alternate)
+WoW Audio does not operate an owner-managed Railway/server/cloud TTS proxy.
+There must be no owner API account that needs routine switching, quota maintenance, secret rotation, or manual intervention for ordinary users.
 
-Cloud credentials must never be shipped in the APK. The Android app talks to a small WoW Audio backend; the backend holds provider credentials in environment secrets.
+The production design is device-first: each phone downloads a Myanmar voice pack once and runs speech locally. Voice-pack files may be hosted as static versioned downloads; static hosting contains no credentials and executes no user requests.
+
+## Natural voice candidate
+
+The first HQ candidate is F5-Myanmar-TTS v2, because it is Burmese-specific and trained for substantially more natural cadence and pronunciation than the MMS fallback. Its published FP16 checkpoint is large, so WoW Audio must not ship it inside the base APK.
+
+The engineering path is:
+1. Convert/pin the Burmese checkpoint to a mobile ONNX/ORT-compatible graph.
+2. Evaluate FP16 and quantized variants.
+3. Use ONNX Runtime execution providers (NNAPI/QNN where usable; CPU fallback).
+4. Download the selected voice pack once into app-private storage with SHA-256 verification.
+5. Keep a versioned voice manifest so upgrades are automatic and rollback-safe.
+
+The HQ voice cannot become the default until it passes real Android benchmarks. Target gates:
+- first audible speech <= 3 seconds on a representative mid-range Android phone after model warmup,
+- sustained generation at or faster than playback (RTF <= 1) so look-ahead can prevent gaps,
+- no process crash under long-book use,
+- acceptable Burmese pronunciation and naturalness in real listening tests.
+
+If F5 cannot meet those gates on ordinary phones, it remains an optional HQ pack rather than forcing a slow experience. Other on-device candidates can be evaluated behind the same VoiceEngine interface without rewriting the player.
+
+## Fast fallback
+
+The existing MMS Burmese model becomes a Lite/emergency fallback only. It is not the quality target. Production should make it a downloadable fallback rather than inflating the base APK.
 
 ## Latency strategy
 
-- First request: very small sentence/phrase so first sound starts quickly.
-- Once playback starts, prefetch the next 2-3 larger text segments in parallel.
-- Reuse HTTP connections.
-- Use compressed speech audio over the network.
-- Never block playback on whole-book synthesis.
+- On import, immediately prepare the first short segment in the background.
+- Play uses the prepared segment as soon as possible.
+- While segment N is playing, synthesize N+1, N+2 and N+3 ahead.
+- Never synthesize only after playback has already stopped.
+- Persist generated segments so replay never requires regeneration.
+- Warm the model once per reading session instead of recreating it for every segment.
 
-## Player contract
+## Audiobook cache and timeline
 
-Generated online speech is persistent app-private cache, keyed by normalized text hash + voice + rate.
+Speech cache is app-private and keyed by book/text hash + voice-pack version + voice/style + rate.
 The player must provide:
-- Play / Pause
-- exact resume (segment + milliseconds)
-- 15-second back / forward
-- previous / next segment
-- seek into already cached speech
-- background and lock-screen controls
-- seamless progression through cached/prefetched segments
+- Play / Pause,
+- exact resume: segment plus playback milliseconds,
+- 15-second back / forward,
+- previous / next segment,
+- replay of already heard audio without regeneration,
+- background and lock-screen controls,
+- seamless continuation through cached/look-ahead segments.
 
-A segment is not deleted after playback. Cache eviction is LRU/storage-aware and never removes the currently playing segment.
+A played segment is never immediately deleted. Cache eviction is storage-aware LRU and never evicts the current segment or the nearby rewind window.
 
-## Offline fallback
+## Voice-pack downloads
 
-The existing MMS Burmese model is fallback only. It is not allowed to block the natural online path. Production can make the offline model an optional download to reduce APK size.
-
-## Privacy
-
-Online mode sends only the short text segment needed for speech synthesis. The backend must not log book text and must not persist book text or generated audio. Audio is cached only on the user's device.
+The APK stays small. Voice packs are static downloadable artifacts, not a backend service.
+Every pack must have:
+- immutable version,
+- SHA-256 digest,
+- license/attribution metadata,
+- minimum app/runtime version,
+- atomic download/install,
+- rollback to last-known-good pack.
 
 ## Accessibility
 
-TalkBack-first controls, large touch targets, concise labels, predictable focus order. Day-to-day UI remains Add Book and Play/Resume; provider setup belongs outside the primary reading flow.
+TalkBack-first controls, large touch targets and predictable focus order. The everyday UI remains Add Book, Play/Resume, Pause, 15s Back, 15s Forward and Delete. Model/runtime details stay out of the normal reading flow.
