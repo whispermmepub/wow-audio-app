@@ -1,0 +1,15 @@
+.gradle/
+local.properties
+/build/
+app/build/
+*.jks
+*.keystore
+*.p12
+*.apk
+*.aab
+.idea/
+
+# Fetched at build time from pinned upstream releases.
+app/libs/*.aar
+app/src/main/assets/tts/**/*.onnx
+app/src/main/assets/tts/**/tokens.txt

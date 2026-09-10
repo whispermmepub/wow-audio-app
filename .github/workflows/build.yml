@@ -1,0 +1,123 @@
+name: Build clean WoW Audio
+
+on:
+  push:
+    branches: [main, 'rebuild/**', 'feature/**', 'fix/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android 16 SDK
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"'
+
+      - name: Fetch pinned offline Burmese TTS runtime and model
+        run: bash tools/fetch_offline_tts.sh
+
+      - name: Smoke-test Burmese model on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet "sherpa-onnx==1.13.7"
+          python3 - <<'PY'
+          import sherpa_onnx
+
+          model = "app/src/main/assets/tts/mya/model.onnx"
+          tokens = "app/src/main/assets/tts/mya/tokens.txt"
+          config = sherpa_onnx.OfflineTtsConfig(
+              model=sherpa_onnx.OfflineTtsModelConfig(
+                  vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                      model=model,
+                      tokens=tokens,
+                      data_dir="",
+                  ),
+                  num_threads=2,
+                  debug=False,
+                  provider="cpu",
+              ),
+              max_num_sentences=1,
+          )
+          assert config.validate(), "Sherpa rejected the Burmese VITS config"
+          tts = sherpa_onnx.OfflineTts(config)
+          audio = tts.generate("မင်္ဂလာပါ", sid=0, speed=1.0)
+          count = len(audio.samples)
+          rate = int(audio.sample_rate)
+          print(f"Burmese model smoke test: {count} samples at {rate} Hz")
+          assert rate > 0, "Invalid sample rate"
+          assert count > 1000, "Burmese model produced too little audio"
+          PY
+
+      - name: Verify built-in Myanmar reader contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
+          grep -q "versionCode 1" app/build.gradle
+          grep -q "versionName '1.0.0'" app/build.gradle
+          grep -q "class MmsMyanmarTtsEngine" app/src/main/java/com/whisper/wowaudio/MmsMyanmarTtsEngine.java
+          grep -q "OfflineTts" app/src/main/java/com/whisper/wowaudio/MmsMyanmarTtsEngine.java
+          grep -q "AudioTrack" app/src/main/java/com/whisper/wowaudio/ReadingService.java
+          grep -q "Built-in Myanmar Voice" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "Delete Book" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "ACTION_OPEN_DOCUMENT" app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q "SEND_MULTIPLE" app/src/main/AndroidManifest.xml
+          grep -q "ShareImportActivity" app/src/main/AndroidManifest.xml
+          test -s app/src/main/assets/tts/mya/model.onnx
+          test -s app/src/main/assets/tts/mya/tokens.txt
+          test -s app/libs/sherpa-onnx-1.13.7.aar
+          if grep -R -q "android.speech.tts.TextToSpeech\|org.saomaicenter.myanmartts\|GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java app/src/main/AndroidManifest.xml; then
+            echo "External/old speech architecture found in built-in voice build"
+            exit 1
+          fi
+          git diff --check
+
+      - name: Build and lint
+        run: gradle :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
+
+      - name: Verify APK identity and bundled voice
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='1'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.0.0'"
+          "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
+          "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
+          unzip -l "$APK" | grep -q "assets/tts/mya/model.onnx"
+          unzip -l "$APK" | grep -q "assets/tts/mya/tokens.txt"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libsherpa-onnx-jni.so"
+          unzip -l "$APK" | grep -q "assets/THIRD_PARTY_NOTICES.txt"
+          ls -lh "$APK"
+
+      - name: Upload built-in Myanmar voice test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.0.0-built-in-Myanmar-TTS-test
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload built-in Myanmar voice unsigned release
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.0.0-built-in-Myanmar-TTS-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 3
+          if-no-files-found: error

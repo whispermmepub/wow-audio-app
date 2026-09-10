@@ -1,17 +1,25 @@
-# WoW Audio
+# WoW Audio — Clean Rebuild
 
-Fresh rebuild starting point.
+A simple Myanmar-first accessible reading app.
 
-The previous implementation has been archived at:
+## Product rule
 
-`archive/wow-audio-v1.3-before-rebuild`
+**Add a book → tap Play → hear it read aloud.**
 
-## Status
+No chapter generation workflow, no audio-cache preparation screen, and no required cloud account in the core experience.
 
-This `main` branch is intentionally clean. The old Android app, CI workflow, generated-audio architecture, offline TTS experiments, and implementation-specific documentation have been removed from the active branch so the product can be redesigned from first principles.
+## First clean build
 
-## Product direction
+- EPUB and UTF-8 TXT import
+- direct Android TextToSpeech playback
+- Myanmar locale request (`my-MM`)
+- foreground reading service for screen-off playback
+- Play / Pause / Resume
+- persistent reading position
+- delete books from the private library
+- ACTION_VIEW / ACTION_SEND import
+- TalkBack-friendly large controls
 
-WoW Audio will be reconsidered from the ground up with one priority: a simple, reliable and highly accessible audiobook experience for Myanmar blind and low-vision readers.
+The app uses the Android TextToSpeech API. Actual Myanmar speech depends on an installed TTS engine that reports Myanmar support. Google Translate being able to speak Burmese does not guarantee that the Google Android system TTS engine exposes Burmese to third-party apps.
 
-No previous architecture is assumed to be correct. New implementation decisions should be made only after the core user flow, TTS strategy, accessibility behavior, offline/online trade-offs, and update/distribution model are deliberately redesigned.
+Old experiments are archived outside main. This rebuild starts with a new application signing line.
