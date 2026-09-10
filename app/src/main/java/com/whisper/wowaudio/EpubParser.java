@@ -5,7 +5,6 @@ import android.text.Html;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import java.io.ByteArrayInputStream;
@@ -15,7 +14,6 @@ import java.io.InputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -161,6 +159,11 @@ final class EpubParser {
                 if (!normalized.isEmpty()) normalized.remove(normalized.size() - 1);
             } else normalized.add(part);
         }
-        return String.join("/", normalized);
+        StringBuilder out = new StringBuilder();
+        for (String part : normalized) {
+            if (out.length() > 0) out.append('/');
+            out.append(part);
+        }
+        return out.toString();
     }
 }
