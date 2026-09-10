@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.speech.tts.TextToSpeech;
@@ -25,6 +26,8 @@ public final class ReadingService extends Service {
     static final String EXTRA_MESSAGE = "message";
     static final String EXTRA_PLAYING = "playing";
 
+    static final String SM_ENGINE_PACKAGE = "org.saomaicenter.myanmartts";
+
     private static final String CHANNEL = "reading";
     private static final int NOTIFICATION_ID = 1001;
 
@@ -36,6 +39,7 @@ public final class ReadingService extends Service {
     private int spokenBaseOffset;
     private boolean paused;
     private boolean ttsReady;
+    private boolean usingSmEngine;
     private long generation;
 
     @Override public void onCreate() {
@@ -86,7 +90,7 @@ public final class ReadingService extends Service {
                     chunks = parsed;
                     chunkIndex = savedChunk;
                     charOffset = Math.min(savedOffset, chunks.get(chunkIndex).length());
-                    initTts(token);
+                    initPreferredTts(token);
                 });
             } catch (Exception e) {
                 broadcast("Cannot read this book: " + safeMessage(e), false);
@@ -95,34 +99,86 @@ public final class ReadingService extends Service {
         }, "book-loader").start();
     }
 
-    private void initTts(long token) {
+    private void initPreferredTts(long token) {
         ttsReady = false;
-        tts = new TextToSpeech(getApplicationContext(), status -> {
+        usingSmEngine = false;
+        if (isPackageInstalled(SM_ENGINE_PACKAGE)) {
+            initTts(token, true);
+        } else {
+            initTts(token, false);
+        }
+    }
+
+    private void initTts(long token, boolean requestSmEngine) {
+        stopTtsOnly();
+        usingSmEngine = requestSmEngine;
+
+        TextToSpeech.OnInitListener listener = status -> {
             if (token != generation || tts == null) return;
             if (status != TextToSpeech.SUCCESS) {
-                unavailable("Text-to-speech could not start.");
+                if (usingSmEngine) {
+                    // A broken/incomplete SM installation must not kill WoW Audio. Try another
+                    // installed engine that genuinely exposes my-MM, then show a useful error.
+                    usingSmEngine = false;
+                    runOnServiceThread(() -> initTts(token, false));
+                } else {
+                    unavailable("Myanmar text-to-speech could not start. Install or repair SM Myanmar TTS.");
+                }
                 return;
             }
-            Locale myanmar = new Locale("my", "MM");
-            int available = tts.isLanguageAvailable(myanmar);
-            if (available < TextToSpeech.LANG_AVAILABLE) available = tts.isLanguageAvailable(new Locale("my"));
-            if (available < TextToSpeech.LANG_AVAILABLE) {
-                unavailable("This phone's current TTS engine does not provide a Myanmar voice.");
+            configureMyanmarVoice(token);
+        };
+
+        if (requestSmEngine) {
+            tts = new TextToSpeech(getApplicationContext(), listener, SM_ENGINE_PACKAGE);
+        } else {
+            tts = new TextToSpeech(getApplicationContext(), listener);
+        }
+    }
+
+    private void configureMyanmarVoice(long token) {
+        if (token != generation || tts == null) return;
+
+        Locale myanmar = new Locale("my", "MM");
+        int available = tts.isLanguageAvailable(myanmar);
+        if (available < TextToSpeech.LANG_AVAILABLE) available = tts.isLanguageAvailable(new Locale("my"));
+
+        if (available < TextToSpeech.LANG_AVAILABLE) {
+            if (usingSmEngine) {
+                // Some third-party engines report language availability imperfectly. Try the
+                // language selection once before considering the engine unusable.
+                int direct = tts.setLanguage(myanmar);
+                if (direct < TextToSpeech.LANG_AVAILABLE) direct = tts.setLanguage(new Locale("my"));
+                if (direct < TextToSpeech.LANG_AVAILABLE) {
+                    usingSmEngine = false;
+                    runOnServiceThread(() -> initTts(token, false));
+                    return;
+                }
+            } else {
+                unavailable("No Myanmar voice is available. Install SM Myanmar TTS and try Play again.");
                 return;
             }
+        } else {
             int result = tts.setLanguage(myanmar);
             if (result < TextToSpeech.LANG_AVAILABLE) result = tts.setLanguage(new Locale("my"));
             if (result < TextToSpeech.LANG_AVAILABLE) {
-                unavailable("Myanmar voice could not be selected.");
+                if (usingSmEngine) {
+                    usingSmEngine = false;
+                    runOnServiceThread(() -> initTts(token, false));
+                } else {
+                    unavailable("Myanmar voice could not be selected.");
+                }
                 return;
             }
-            tts.setSpeechRate(1.0f);
-            tts.setPitch(1.0f);
-            tts.setOnUtteranceProgressListener(listener(token));
-            ttsReady = true;
-            paused = false;
-            speakCurrent(token);
-        });
+        }
+
+        tts.setSpeechRate(1.0f);
+        tts.setPitch(1.0f);
+        tts.setOnUtteranceProgressListener(listener(token));
+        ttsReady = true;
+        paused = false;
+        broadcast(usingSmEngine ? "SM Myanmar TTS ready" : "Myanmar voice ready", false);
+        speakCurrent(token);
     }
 
     private UtteranceProgressListener listener(long token) {
@@ -152,8 +208,15 @@ public final class ReadingService extends Service {
                 if (token != generation) return;
                 paused = true;
                 saveProgress();
-                broadcast("Speech stopped. Tap Resume to try again.", false);
+                String message = usingSmEngine
+                        ? "SM Myanmar TTS stopped. Tap Resume to retry. If it repeats, repair or reinstall the full SM Myanmar TTS app."
+                        : "Speech stopped. Tap Resume to try again.";
+                broadcast(message, false);
                 updateNotification("Speech stopped • tap Resume", false);
+            }
+
+            @Override public void onError(String utteranceId, int errorCode) {
+                onError(utteranceId);
             }
 
             @Override public void onRangeStart(String utteranceId, int start, int end, int frame) {
@@ -191,7 +254,10 @@ public final class ReadingService extends Service {
         if (result == TextToSpeech.ERROR) {
             paused = true;
             saveProgress();
-            broadcast("The TTS engine rejected this text. Tap Resume to retry.", false);
+            String message = usingSmEngine
+                    ? "SM Myanmar TTS rejected this text. Tap Resume to retry."
+                    : "The TTS engine rejected this text. Tap Resume to retry.";
+            broadcast(message, false);
             updateNotification("Speech error • tap Resume", false);
         }
     }
@@ -239,6 +305,15 @@ public final class ReadingService extends Service {
         ttsReady = false;
     }
 
+    private boolean isPackageInstalled(String packageName) {
+        try {
+            getPackageManager().getApplicationInfo(packageName, PackageManager.GET_META_DATA);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
     private void saveProgress() {
         if (book == null || chunks.isEmpty()) return;
         prefs().edit()
@@ -254,7 +329,9 @@ public final class ReadingService extends Service {
 
     private String progressText() {
         if (book == null || chunks.isEmpty()) return "Reading";
-        return "Reading " + book.title + " • " + (Math.min(chunkIndex + 1, chunks.size())) + " of " + chunks.size();
+        String engine = usingSmEngine ? "SM Myanmar TTS" : "Myanmar TTS";
+        return engine + " • " + book.title + " • "
+                + (Math.min(chunkIndex + 1, chunks.size())) + " of " + chunks.size();
     }
 
     private Notification notification(String text, boolean playing) {
@@ -292,8 +369,9 @@ public final class ReadingService extends Service {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            NotificationChannel channel = new NotificationChannel(CHANNEL, "Book reading", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Controls direct text-to-speech book reading");
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL, "Book reading", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Controls direct Myanmar text-to-speech book reading");
             nm.createNotificationChannel(channel);
         }
     }
