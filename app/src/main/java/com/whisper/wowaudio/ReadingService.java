@@ -9,12 +9,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
-import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 
 public final class ReadingService extends Service {
     static final String ACTION_PLAY_BOOK = "com.whisper.wowaudio.PLAY_BOOK";
@@ -28,14 +25,11 @@ public final class ReadingService extends Service {
     private static final String CHANNEL = "reading";
     private static final int NOTIFICATION_ID = 1001;
 
-    private TextToSpeech tts;
+    private volatile BundledBurmeseTts speaker;
     private BookStore.Book book;
     private List<String> chunks = Collections.emptyList();
     private int chunkIndex;
-    private int charOffset;
-    private int spokenBaseOffset;
     private boolean paused;
-    private boolean ttsReady;
     private long generation;
 
     @Override public void onCreate() {
@@ -52,7 +46,7 @@ public final class ReadingService extends Service {
         }
         if (ACTION_TOGGLE.equals(action)) {
             if (book == null) return START_NOT_STICKY;
-            if (paused || (tts != null && !tts.isSpeaking())) resumeReading(); else pauseReading();
+            if (paused) resumeReading(); else pauseReading();
             return START_NOT_STICKY;
         }
         if (ACTION_PLAY_BOOK.equals(action)) {
@@ -65,185 +59,129 @@ public final class ReadingService extends Service {
     private void startBook(String id) {
         generation++;
         long token = generation;
-        stopTtsOnly();
+        releaseSpeaker();
         book = new BookStore(this).get(id);
+        chunks = Collections.emptyList();
+        chunkIndex = 0;
+        paused = false;
         if (book == null) {
             broadcast("Book not found.", false);
             stopSelf();
             return;
         }
-        startForeground(NOTIFICATION_ID, notification("Starting Myanmar voice…", false));
+        startForeground(NOTIFICATION_ID, notification("Preparing offline Myanmar voice…", false));
         new Thread(() -> {
             try {
                 String text = new BookStore(this).readText(book);
                 List<String> parsed = TtsText.chunks(text);
                 if (parsed.isEmpty()) throw new IllegalArgumentException("No readable text.");
-                SharedPreferences p = prefs();
-                int savedChunk = clamp(p.getInt(key("chunk"), 0), 0, parsed.size() - 1);
-                int savedOffset = Math.max(0, p.getInt(key("offset"), 0));
-                runOnServiceThread(() -> {
-                    if (token != generation || book == null || !book.id.equals(id)) return;
-                    chunks = parsed;
-                    chunkIndex = savedChunk;
-                    charOffset = Math.min(savedOffset, chunks.get(chunkIndex).length());
-                    initTts(token);
-                });
+                int savedChunk = clamp(prefs().getInt(key("chunk"), 0), 0, parsed.size() - 1);
+                if (token != generation || book == null || !book.id.equals(id)) return;
+                chunks = parsed;
+                chunkIndex = savedChunk;
+                runReader(token);
             } catch (Exception e) {
+                if (token != generation) return;
                 broadcast("Cannot read this book: " + safeMessage(e), false);
-                stopReading(false);
+                updateNotification("Could not start • tap Play to retry", false);
+                paused = true;
             }
         }, "book-loader").start();
     }
 
-    private void initTts(long token) {
-        ttsReady = false;
-        tts = new TextToSpeech(getApplicationContext(), status -> {
-            if (token != generation || tts == null) return;
-            if (status != TextToSpeech.SUCCESS) {
-                unavailable("Text-to-speech could not start.");
-                return;
-            }
-            Locale myanmar = new Locale("my", "MM");
-            int available = tts.isLanguageAvailable(myanmar);
-            if (available < TextToSpeech.LANG_AVAILABLE) available = tts.isLanguageAvailable(new Locale("my"));
-            if (available < TextToSpeech.LANG_AVAILABLE) {
-                unavailable("This phone's current TTS engine does not provide a Myanmar voice.");
-                return;
-            }
-            int result = tts.setLanguage(myanmar);
-            if (result < TextToSpeech.LANG_AVAILABLE) result = tts.setLanguage(new Locale("my"));
-            if (result < TextToSpeech.LANG_AVAILABLE) {
-                unavailable("Myanmar voice could not be selected.");
-                return;
-            }
-            tts.setSpeechRate(1.0f);
-            tts.setPitch(1.0f);
-            tts.setOnUtteranceProgressListener(listener(token));
-            ttsReady = true;
-            paused = false;
-            speakCurrent(token);
-        });
-    }
-
-    private UtteranceProgressListener listener(long token) {
-        return new UtteranceProgressListener() {
-            @Override public void onStart(String utteranceId) {
-                if (token != generation) return;
-                broadcast(progressText(), true);
-                updateNotification(progressText(), true);
-            }
-
-            @Override public void onDone(String utteranceId) {
-                if (token != generation || paused || book == null) return;
-                chunkIndex++;
-                charOffset = 0;
-                if (chunkIndex >= chunks.size()) {
+    private void runReader(long token) {
+        if (token != generation || paused || book == null || chunks.isEmpty()) return;
+        new Thread(() -> {
+            BundledBurmeseTts local = null;
+            try {
+                local = new BundledBurmeseTts(getApplicationContext(), (textPosition, textLength) -> { });
+                if (token != generation || paused || book == null) {
+                    local.release();
+                    return;
+                }
+                speaker = local;
+                while (token == generation && !paused && book != null && chunkIndex < chunks.size()) {
+                    String status = progressText();
+                    broadcast(status, true);
+                    updateNotification(status, true);
+                    boolean ok = local.speakBlocking(chunks.get(chunkIndex));
+                    if (token != generation || paused || book == null) return;
+                    if (!ok) {
+                        paused = true;
+                        saveProgress();
+                        broadcast("Speech stopped. Tap Resume to try again.", false);
+                        updateNotification("Speech stopped • tap Resume", false);
+                        return;
+                    }
+                    chunkIndex++;
+                    if (chunkIndex < chunks.size()) saveProgress();
+                }
+                if (token == generation && !paused && book != null && chunkIndex >= chunks.size()) {
                     String finishedTitle = book.title;
                     clearProgress();
                     broadcast("Finished " + finishedTitle, false);
                     stopReading(false);
-                    return;
                 }
-                saveProgress();
-                speakCurrent(token);
-            }
-
-            @Override public void onError(String utteranceId) {
+            } catch (Throwable e) {
                 if (token != generation) return;
                 paused = true;
                 saveProgress();
-                broadcast("Speech stopped. Tap Resume to try again.", false);
-                updateNotification("Speech stopped • tap Resume", false);
+                broadcast("Offline Myanmar voice error: " + safeMessage(e), false);
+                updateNotification("Voice error • tap Resume", false);
+            } finally {
+                if (local != null && speaker == local) {
+                    local.release();
+                    speaker = null;
+                }
             }
-
-            @Override public void onRangeStart(String utteranceId, int start, int end, int frame) {
-                if (token != generation) return;
-                charOffset = Math.max(0, spokenBaseOffset + start);
-                saveProgress();
-            }
-        };
-    }
-
-    private void speakCurrent(long token) {
-        if (token != generation || !ttsReady || tts == null || book == null) return;
-        if (chunkIndex < 0 || chunkIndex >= chunks.size()) return;
-        String full = chunks.get(chunkIndex);
-        if (charOffset >= full.length()) charOffset = 0;
-        spokenBaseOffset = charOffset;
-        String piece = full.substring(charOffset).trim();
-        if (piece.isEmpty()) {
-            chunkIndex++;
-            charOffset = 0;
-            if (chunkIndex >= chunks.size()) {
-                String finishedTitle = book.title;
-                clearProgress();
-                broadcast("Finished " + finishedTitle, false);
-                stopReading(false);
-            } else {
-                saveProgress();
-                speakCurrent(token);
-            }
-            return;
-        }
-        paused = false;
-        String utterance = book.id + ":" + chunkIndex + ":" + token;
-        int result = tts.speak(piece, TextToSpeech.QUEUE_FLUSH, null, utterance);
-        if (result == TextToSpeech.ERROR) {
-            paused = true;
-            saveProgress();
-            broadcast("The TTS engine rejected this text. Tap Resume to retry.", false);
-            updateNotification("Speech error • tap Resume", false);
-        }
+        }, "offline-burmese-reader").start();
     }
 
     private void pauseReading() {
-        if (tts != null) tts.stop();
         paused = true;
         saveProgress();
+        generation++;
+        releaseSpeaker();
         broadcast("Paused", false);
         updateNotification("Paused", false);
     }
 
     private void resumeReading() {
-        if (!ttsReady || tts == null) {
-            if (book != null) startBook(book.id);
+        if (book == null) return;
+        paused = false;
+        generation++;
+        long token = generation;
+        if (chunks.isEmpty()) {
+            startBook(book.id);
             return;
         }
-        paused = false;
-        speakCurrent(generation);
-    }
-
-    private void unavailable(String message) {
-        paused = true;
-        ttsReady = false;
-        broadcast(message, false);
-        updateNotification(message, false);
+        runReader(token);
     }
 
     private void stopReading(boolean savePosition) {
         if (savePosition) saveProgress();
         generation++;
-        stopTtsOnly();
+        paused = true;
+        releaseSpeaker();
         book = null;
         chunks = Collections.emptyList();
         stopForeground(true);
         stopSelf();
     }
 
-    private void stopTtsOnly() {
-        if (tts != null) {
-            try { tts.stop(); } catch (Exception ignored) { }
-            try { tts.shutdown(); } catch (Exception ignored) { }
+    private void releaseSpeaker() {
+        BundledBurmeseTts s = speaker;
+        speaker = null;
+        if (s != null) {
+            try { s.release(); } catch (Exception ignored) { }
         }
-        tts = null;
-        ttsReady = false;
     }
 
     private void saveProgress() {
         if (book == null || chunks.isEmpty()) return;
         prefs().edit()
                 .putInt(key("chunk"), Math.max(0, Math.min(chunkIndex, chunks.size() - 1)))
-                .putInt(key("offset"), Math.max(0, charOffset))
+                .putInt(key("offset"), 0)
                 .apply();
     }
 
@@ -254,7 +192,7 @@ public final class ReadingService extends Service {
 
     private String progressText() {
         if (book == null || chunks.isEmpty()) return "Reading";
-        return "Reading " + book.title + " • " + (Math.min(chunkIndex + 1, chunks.size())) + " of " + chunks.size();
+        return "Reading " + book.title + " • " + Math.min(chunkIndex + 1, chunks.size()) + " of " + chunks.size();
     }
 
     private Notification notification(String text, boolean playing) {
@@ -293,7 +231,7 @@ public final class ReadingService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             NotificationChannel channel = new NotificationChannel(CHANNEL, "Book reading", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Controls direct text-to-speech book reading");
+            channel.setDescription("Offline Myanmar book reading controls");
             nm.createNotificationChannel(channel);
         }
     }
@@ -313,10 +251,6 @@ public final class ReadingService extends Service {
         return (book == null ? "none" : book.id) + ":" + suffix;
     }
 
-    private void runOnServiceThread(Runnable r) {
-        new android.os.Handler(getMainLooper()).post(r);
-    }
-
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
     }
@@ -327,7 +261,7 @@ public final class ReadingService extends Service {
     }
 
     @Override public void onDestroy() {
-        stopTtsOnly();
+        releaseSpeaker();
         super.onDestroy();
     }
 
