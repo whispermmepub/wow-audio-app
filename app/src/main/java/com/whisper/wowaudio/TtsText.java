@@ -4,7 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class TtsText {
-    private static final int MAX_CHARS = 360;
+    // Keep the first on-device neural inference short so users hear speech quickly even on
+    // modest phones. Subsequent chunks are generated as playback advances.
+    private static final int MAX_CHARS = 120;
 
     private TtsText() { }
 
@@ -30,7 +32,7 @@ final class TtsText {
 
     private static int findBreak(String text, int start, int limit) {
         if (limit >= text.length()) return text.length();
-        int floor = start + Math.max(80, (limit - start) / 2);
+        int floor = start + Math.max(48, (limit - start) / 2);
         for (int i = limit - 1; i >= floor; i--) {
             char c = text.charAt(i);
             if (c == '။' || c == '၊' || c == '.' || c == '!' || c == '?' || c == '\n') {
