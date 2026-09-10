@@ -23,8 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * Foreground audiobook reader backed by the app's bundled Burmese MMS/VITS model.
  *
  * Neural inference produces floating-point PCM. Each short chunk is written to a standard
- * PCM16 WAV file and handed to Android MediaPlayer. Using the platform media pipeline is
- * deliberately more conservative than driving an OEM AudioTrack static buffer directly.
+ * PCM16 WAV file and handed to Android MediaPlayer for broad real-device compatibility.
  */
 public final class ReadingService extends Service {
     static final String ACTION_PLAY_BOOK = "com.whisper.wowaudio.PLAY_BOOK";
@@ -89,7 +88,7 @@ public final class ReadingService extends Service {
         }
 
         startForeground(NOTIFICATION_ID, notification("Loading built-in Myanmar voice…", false));
-        broadcast("Starting " + target.title, false);
+        broadcast("Loading built-in Myanmar voice…", false);
 
         Thread t = new Thread(() -> readBookLoop(target, token), "wow-burmese-reader");
         worker = t;
@@ -105,6 +104,7 @@ public final class ReadingService extends Service {
 
             SharedPreferences p = prefs();
             int index = clamp(p.getInt(key(target.id, "chunk"), 0), 0, chunks.size() - 1);
+            final int firstIndex = index;
             activeChunkCount = chunks.size();
             activeChunk = index;
 
@@ -112,22 +112,28 @@ public final class ReadingService extends Service {
             engine = new MmsMyanmarTtsEngine(this);
             if (token != generation) return;
 
-            broadcast("Built-in Myanmar voice ready", true);
+            broadcast("Built-in Myanmar voice ready • preparing first speech…", false);
             while (index < chunks.size() && token == generation) {
                 waitWhilePaused(token);
                 if (token != generation) return;
 
                 activeChunk = index;
                 String status = "Generating speech • " + (index + 1) + " of " + chunks.size();
-                updateNotification(status, true);
+                updateNotification(status, false);
+                if (index == firstIndex) broadcast(status, false);
 
+                long started = System.nanoTime();
                 MmsMyanmarTtsEngine.Audio audio = engine.synthesize(chunks.get(index), 1.0f);
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
                 if (token != generation) return;
                 validateAudible(audio);
 
                 waitWhilePaused(token);
                 if (token != generation) return;
 
+                if (index == firstIndex) {
+                    broadcast("Speech ready in " + oneDecimalSeconds(elapsedMs) + "s • playing now", true);
+                }
                 updateNotification("Reading " + target.title + " • " + (index + 1) + " of " + chunks.size(), true);
                 playBlocking(audio, token, index);
                 if (token != generation) return;
@@ -197,7 +203,6 @@ public final class ReadingService extends Service {
             waitWhilePaused(token);
             if (token != generation) return;
             player.start();
-            broadcast("Playing built-in Myanmar voice", true);
 
             while (token == generation && finished.getCount() > 0) {
                 if (paused) {
@@ -410,6 +415,10 @@ public final class ReadingService extends Service {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static String oneDecimalSeconds(long millis) {
+        return String.format(java.util.Locale.US, "%.1f", millis / 1000.0);
     }
 
     private static String shortNumber(double value) {
