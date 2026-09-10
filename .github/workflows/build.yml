@@ -35,7 +35,10 @@ jobs:
           grep -q "new Locale(\"my\", \"MM\")" app/src/main/java/com/whisper/wowaudio/ReadingService.java
           grep -q "Delete Book" app/src/main/java/com/whisper/wowaudio/MainActivity.java
           grep -q "ACTION_OPEN_DOCUMENT" app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          ! grep -R -q "GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java || true
+          if grep -R -q "GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java; then
+            echo "Old generation architecture found in clean rebuild"
+            exit 1
+          fi
           git diff --check
       - name: Build and lint
         run: gradle :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
