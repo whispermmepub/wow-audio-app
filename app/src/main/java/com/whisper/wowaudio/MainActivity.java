@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -24,10 +25,15 @@ import android.widget.Toast;
 
 import androidx.core.content.ContextCompat;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class MainActivity extends Activity {
     private static final int PICK_BOOK = 41;
+    private static final String ACTION_OPEN_BOOK = "com.whisper.wowaudio.action.OPEN_BOOK";
 
     private static final int NAVY_950 = Color.rgb(7, 27, 69);
     private static final int NAVY_800 = Color.rgb(14, 52, 117);
@@ -106,7 +112,7 @@ public final class MainActivity extends Activity {
         if (books.isEmpty()) {
             LinearLayout empty = card();
             empty.addView(heading("စာအုပ် မရှိသေးပါ", 20, INK));
-            empty.addView(text("EPUB သို့မဟုတ် UTF-8 TXT ဖိုင်ကို Add Book နှိပ်ပြီး ထည့်ပါ။ ပြီးရင် Play တစ်ချက်နှိပ်ရုံပါ။", 15, MUTED, false), marginTop(8));
+            empty.addView(text("EPUB သို့မဟုတ် UTF-8 TXT ဖိုင်ကို Add Book နှိပ်ပြီး ထည့်ပါ။ Telegram/File Manager ကနေ Open with သို့မဟုတ် Share နဲ့လည်း တန်းထည့်နိုင်ပါတယ်။", 15, MUTED, false), marginTop(8));
             content.addView(empty, marginTop(20));
             return;
         }
@@ -164,57 +170,110 @@ public final class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/epub+zip", "text/plain", "application/octet-stream"});
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/epub+zip",
+                "application/octet-stream",
+                "application/zip",
+                "application/x-zip-compressed",
+                "text/plain"});
         startActivityForResult(intent, PICK_BOOK);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_BOOK && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            importUri(data.getData());
+            importUris(Collections.singletonList(data.getData()));
         }
     }
 
     private void handleLaunchIntent(Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
-        Uri uri = null;
-        if (Intent.ACTION_VIEW.equals(action)) uri = intent.getData();
-        else if (Intent.ACTION_SEND.equals(action)) {
-            if (Build.VERSION.SDK_INT >= 33) uri = intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class);
-            else {
-                //noinspection deprecation
-                uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-            }
-        }
-        if (uri != null) importUri(uri);
+        if (!Intent.ACTION_VIEW.equals(action)
+                && !Intent.ACTION_SEND.equals(action)
+                && !Intent.ACTION_SEND_MULTIPLE.equals(action)
+                && !ACTION_OPEN_BOOK.equals(action)) return;
+        List<Uri> uris = collectUris(intent);
+        if (!uris.isEmpty()) importUris(uris);
     }
 
-    private void importUri(Uri uri) {
+    private List<Uri> collectUris(Intent intent) {
+        Set<Uri> unique = new LinkedHashSet<>();
+        if (intent.getData() != null) unique.add(intent.getData());
+
+        Uri single;
+        if (Build.VERSION.SDK_INT >= 33) single = intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class);
+        else {
+            //noinspection deprecation
+            single = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (single != null) unique.add(single);
+
+        ArrayList<Uri> many;
+        if (Build.VERSION.SDK_INT >= 33) many = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri.class);
+        else {
+            //noinspection deprecation
+            many = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+        }
+        if (many != null) for (Uri uri : many) if (uri != null) unique.add(uri);
+
+        ClipData clip = intent.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+                if (uri != null) unique.add(uri);
+            }
+        }
+        return new ArrayList<>(unique);
+    }
+
+    private void importUris(List<Uri> uris) {
+        if (uris == null || uris.isEmpty()) return;
+        final int total = uris.size();
         final AlertDialog progress = new AlertDialog.Builder(this)
-                .setTitle("Adding book")
-                .setMessage("စာအုပ်ကို Library ထဲ ထည့်နေပါတယ်…")
+                .setTitle(total == 1 ? "Adding book" : "Adding books")
+                .setMessage(total == 1 ? "စာအုပ်ကို Library ထဲ ထည့်နေပါတယ်…" : total + " files ကို Library ထဲ ထည့်နေပါတယ်…")
                 .setCancelable(false)
                 .create();
         progress.show();
+
         new Thread(() -> {
-            try {
-                BookStore.Book book = store.importBook(uri);
-                runOnUiThread(() -> {
-                    progress.dismiss();
-                    Toast.makeText(this, "Added: " + book.title, Toast.LENGTH_SHORT).show();
-                    refresh();
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    progress.dismiss();
+            int added = 0;
+            String lastTitle = null;
+            String firstError = null;
+            for (Uri uri : uris) {
+                try {
+                    BookStore.Book book = store.importBook(uri);
+                    added++;
+                    lastTitle = book.title;
+                } catch (Exception e) {
+                    if (firstError == null) firstError = safeMessage(e);
+                }
+            }
+            final int addedCount = added;
+            final String title = lastTitle;
+            final String error = firstError;
+            runOnUiThread(() -> {
+                progress.dismiss();
+                refresh();
+                if (addedCount == total) {
+                    Toast.makeText(this,
+                            total == 1 ? "Added: " + title : "Added " + addedCount + " books",
+                            Toast.LENGTH_SHORT).show();
+                } else if (addedCount > 0) {
                     new AlertDialog.Builder(this)
-                            .setTitle("Could not add book")
-                            .setMessage(safeMessage(e))
+                            .setTitle("Some files were skipped")
+                            .setMessage("Added " + addedCount + " of " + total + ".\n\n" + (error == null ? "Unsupported file." : error))
                             .setPositiveButton("OK", null)
                             .show();
-                });
-            }
+                } else {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Could not add book")
+                            .setMessage(error == null ? "Only EPUB and UTF-8 TXT files are supported." : error)
+                            .setPositiveButton("OK", null)
+                            .show();
+                }
+            });
         }, "book-import").start();
     }
 
