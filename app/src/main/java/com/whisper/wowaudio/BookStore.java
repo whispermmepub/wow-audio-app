@@ -15,9 +15,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -118,7 +117,7 @@ final class BookStore {
             Book book = readBook(dir);
             if (book != null && book.textFile.isFile()) out.add(book);
         }
-        out.sort((a, b) -> Long.compare(b.addedAt, a.addedAt));
+        Collections.sort(out, (a, b) -> Long.compare(b.addedAt, a.addedAt));
         return out;
     }
 
