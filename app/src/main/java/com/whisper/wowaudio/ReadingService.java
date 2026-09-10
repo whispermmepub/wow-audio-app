@@ -13,7 +13,6 @@ import android.os.Build;
 import android.os.IBinder;
 
 import java.io.File;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -244,7 +243,7 @@ public final class ReadingService extends Service {
         double peak = 0.0;
         int finite = 0;
         for (float sample : audio.samples) {
-            if (!Float.isFinite(sample)) continue;
+            if (Float.isNaN(sample) || Float.isInfinite(sample)) continue;
             double v = Math.max(-1.0, Math.min(1.0, sample));
             sum += v * v;
             peak = Math.max(peak, Math.abs(v));
