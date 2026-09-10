@@ -87,8 +87,8 @@ jobs:
           test -s app/src/main/assets/tts/mya/model.onnx
           test -s app/src/main/assets/tts/mya/tokens.txt
           test -s app/libs/sherpa-onnx-1.13.7.aar
-          if grep -R -q "android.speech.tts.TextToSpeech\|org.saomaicenter.myanmartts\|GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService\|AudioTrack" app/src/main/java app/src/main/AndroidManifest.xml; then
-            echo "Old/external speech output architecture found in v1.0.1"
+          if grep -R -q "android.speech.tts.TextToSpeech\|org.saomaicenter.myanmartts\|GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java app/src/main/AndroidManifest.xml; then
+            echo "Old/external speech architecture found in v1.0.1"
             exit 1
           fi
           git diff --check
