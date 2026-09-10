@@ -16,7 +16,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -31,11 +30,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 public final class MainActivity extends Activity {
     private static final int PICK_BOOK = 41;
+    private static final String SM_ENGINE_PACKAGE = "org.saomaicenter.myanmartts";
 
     private static final int NAVY_950 = Color.rgb(7, 27, 69);
     private static final int NAVY_800 = Color.rgb(14, 52, 117);
@@ -48,7 +47,6 @@ public final class MainActivity extends Activity {
 
     private BookStore store;
     private LinearLayout content;
-    private TextView voiceStatus;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -64,7 +62,9 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         store = new BookStore(this);
         buildShell();
-        requestNotificationPermission();
+        // Deliberately do NOT construct or probe TextToSpeech during startup.
+        // Some broken vendor TTS installs can crash while being probed. WoW Audio
+        // only binds to SM Myanmar TTS after the user explicitly taps Play.
         handleLaunchIntent(getIntent());
     }
 
@@ -82,7 +82,6 @@ public final class MainActivity extends Activity {
                 new IntentFilter(ReadingService.ACTION_STATE),
                 ContextCompat.RECEIVER_NOT_EXPORTED);
         refresh();
-        probeMyanmarVoice();
     }
 
     @Override protected void onPause() {
@@ -102,6 +101,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refresh() {
+        if (content == null) return;
         content.removeAllViews();
         content.addView(hero());
 
@@ -112,12 +112,22 @@ public final class MainActivity extends Activity {
 
         LinearLayout voiceCard = card();
         voiceCard.addView(heading("Myanmar Voice", 18, INK));
-        voiceStatus = text("Checking Myanmar voice…", 14, MUTED, false);
-        voiceStatus.setContentDescription("Myanmar text to speech status");
+        boolean smInstalled = isPackageInstalled(SM_ENGINE_PACKAGE);
+        TextView voiceStatus = text(
+                smInstalled
+                        ? "SM Myanmar TTS installed • Play will use it directly"
+                        : "SM Myanmar TTS not installed",
+                14,
+                smInstalled ? NAVY_800 : MUTED,
+                smInstalled);
+        voiceStatus.setContentDescription(smInstalled
+                ? "SM Myanmar TTS is installed. Play will use it directly."
+                : "SM Myanmar TTS is not installed.");
         voiceCard.addView(voiceStatus, marginTop(6));
-        Button ttsSettings = secondary("Voice settings");
-        ttsSettings.setOnClickListener(v -> openTtsSettings());
-        voiceCard.addView(ttsSettings, marginTop(10));
+
+        Button settings = secondary("Voice settings");
+        settings.setOnClickListener(v -> openTtsSettings());
+        voiceCard.addView(settings, marginTop(10));
         content.addView(voiceCard, marginTop(14));
 
         List<BookStore.Book> books = store.list();
@@ -149,7 +159,7 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) hero.setElevation(dp(5));
 
         TextView eyebrow = text("WoW • ACCESSIBLE READING", 12, CYAN, true);
-        eyebrow.setLetterSpacing(0.08f);
+        if (Build.VERSION.SDK_INT >= 21) eyebrow.setLetterSpacing(0.08f);
         hero.addView(eyebrow);
         hero.addView(heading("WoW Audio", 30, Color.WHITE), marginTop(8));
         hero.addView(text("ဖိုင်ထည့် • Play နှိပ် • မြန်မာလို နားထောင်", 17,
@@ -299,11 +309,20 @@ public final class MainActivity extends Activity {
     }
 
     private void play(BookStore.Book book) {
+        requestNotificationPermission();
         Intent service = new Intent(this, ReadingService.class)
                 .setAction(ReadingService.ACTION_PLAY_BOOK)
                 .putExtra(ReadingService.EXTRA_BOOK_ID, book.id);
-        ContextCompat.startForegroundService(this, service);
-        Toast.makeText(this, "Starting " + book.title, Toast.LENGTH_SHORT).show();
+        try {
+            ContextCompat.startForegroundService(this, service);
+            Toast.makeText(this, "Starting " + book.title, Toast.LENGTH_SHORT).show();
+        } catch (RuntimeException e) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Could not start reading")
+                    .setMessage(safeMessage(e))
+                    .setPositiveButton("OK", null)
+                    .show();
+        }
     }
 
     private void confirmDelete(BookStore.Book book) {
@@ -313,8 +332,10 @@ public final class MainActivity extends Activity {
                         + "\n\nWoW Audio ထဲက private copy နဲ့ saved reading position ကို ဖျက်ပါမယ်။ မူရင်းဖိုင်ကို မဖျက်ပါ။")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (d, w) -> {
-                    Intent stop = new Intent(this, ReadingService.class).setAction(ReadingService.ACTION_STOP);
-                    startService(stop);
+                    try {
+                        Intent stop = new Intent(this, ReadingService.class).setAction(ReadingService.ACTION_STOP);
+                        startService(stop);
+                    } catch (RuntimeException ignored) { }
                     boolean deleted = store.delete(book.id);
                     getSharedPreferences("reading_progress", MODE_PRIVATE).edit()
                             .remove(book.id + ":chunk").remove(book.id + ":offset").apply();
@@ -329,27 +350,13 @@ public final class MainActivity extends Activity {
                 || getSharedPreferences("reading_progress", MODE_PRIVATE).getInt(id + ":offset", 0) > 0;
     }
 
-    private void probeMyanmarVoice() {
-        if (voiceStatus == null) return;
-        voiceStatus.setText("Checking Myanmar voice…");
-        final TextToSpeech[] probe = new TextToSpeech[1];
-        probe[0] = new TextToSpeech(getApplicationContext(), status -> {
-            TextToSpeech t = probe[0];
-            if (voiceStatus == null || isFinishing()) {
-                if (t != null) t.shutdown();
-                return;
-            }
-            if (status != TextToSpeech.SUCCESS || t == null) {
-                voiceStatus.setText("Myanmar voice: engine unavailable");
-            } else {
-                int result = t.isLanguageAvailable(new Locale("my", "MM"));
-                if (result < TextToSpeech.LANG_AVAILABLE) result = t.isLanguageAvailable(new Locale("my"));
-                voiceStatus.setText(result >= TextToSpeech.LANG_AVAILABLE
-                        ? "Myanmar voice: Ready ✓"
-                        : "Myanmar voice: Not available in the current engine");
-            }
-            if (t != null) t.shutdown();
-        });
+    private boolean isPackageInstalled(String packageName) {
+        try {
+            getPackageManager().getApplicationInfo(packageName, PackageManager.GET_META_DATA);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
     }
 
     private void openTtsSettings() {
