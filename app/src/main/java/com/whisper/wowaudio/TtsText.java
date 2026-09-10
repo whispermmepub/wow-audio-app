@@ -12,7 +12,10 @@ final class TtsText {
         List<String> out = new ArrayList<>();
         if (text == null) return out;
         int engineMax = TextToSpeech.getMaxSpeechInputLength();
-        int max = Math.min(Math.max(800, engineMax - 128), 2200);
+        // SM Myanmar TTS is a third-party native engine. Keep chunks deliberately much
+        // smaller than Android's theoretical limit so old/native engine buffers stay stable,
+        // pauses resume quickly, and long EPUB chapters never become one huge speak() call.
+        int max = Math.min(Math.max(450, engineMax - 128), 900);
         int start = 0;
         int length = text.length();
         while (start < length) {
@@ -35,7 +38,9 @@ final class TtsText {
             char c = text.charAt(i);
             if (c == '။' || c == '၊' || c == '.' || c == '!' || c == '?' || c == '\n') return i + 1;
         }
-        for (int i = limit - 1; i >= floor; i--) if (Character.isWhitespace(text.charAt(i))) return i + 1;
+        for (int i = limit - 1; i >= floor; i--) {
+            if (Character.isWhitespace(text.charAt(i))) return i + 1;
+        }
         return limit;
     }
 }
