@@ -20,6 +20,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 final class BookStore {
     static final class Book {
@@ -56,27 +58,35 @@ final class BookStore {
 
     Book importBook(Uri uri) throws Exception {
         String name = displayName(uri);
-        if (name == null || name.trim().isEmpty()) name = "book.epub";
-        String lower = name.toLowerCase(Locale.US);
-        String type;
-        if (lower.endsWith(".epub")) type = "epub";
-        else if (lower.endsWith(".txt")) type = "txt";
-        else {
-            String mime = context.getContentResolver().getType(uri);
-            if ("application/epub+zip".equals(mime)) type = "epub";
-            else if (mime != null && mime.startsWith("text/")) type = "txt";
-            else throw new IllegalArgumentException("Only EPUB and TXT files are supported in this clean build.");
-        }
+        if (name == null || name.trim().isEmpty()) name = "shared-book";
+        String mime = context.getContentResolver().getType(uri);
+        String hintedType = typeFromHints(name, mime);
 
         String id = UUID.randomUUID().toString();
         File dir = new File(root, id);
         if (!dir.mkdirs()) throw new IllegalStateException("Cannot create private book folder.");
 
         try {
+            File incoming = new File(dir, "incoming.bin");
+            copyUri(uri, incoming);
+
+            String type = hintedType;
+            if (type == null && looksLikeEpub(incoming)) type = "epub";
+            if (type == null) throw new IllegalArgumentException("Only EPUB and UTF-8 TXT files are supported.");
+
             File source = new File(dir, type.equals("epub") ? "source.epub" : "source.txt");
-            copyUri(uri, source);
+            if (!incoming.renameTo(source)) {
+                copyFile(incoming, source);
+                //noinspection ResultOfMethodCallIgnored
+                incoming.delete();
+            }
+
+            if (type.equals("epub") && !looksLikeEpub(source)) {
+                throw new IllegalArgumentException("The shared file is not a valid EPUB.");
+            }
 
             String title = stripExtension(name);
+            if (title.trim().isEmpty() || "shared-book".equals(title)) title = "Imported Book";
             String author = "";
             String text;
             if (type.equals("epub")) {
@@ -165,6 +175,16 @@ final class BookStore {
         }
     }
 
+    private static void copyFile(File from, File to) throws Exception {
+        try (FileInputStream in = new FileInputStream(from);
+             FileOutputStream out = new FileOutputStream(to)) {
+            byte[] buffer = new byte[65536];
+            int n;
+            while ((n = in.read(buffer)) >= 0) out.write(buffer, 0, n);
+            out.getFD().sync();
+        }
+    }
+
     private String displayName(Uri uri) {
         try (Cursor c = context.getContentResolver().query(
                 uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
@@ -174,6 +194,34 @@ final class BookStore {
             }
         } catch (Exception ignored) { }
         return uri.getLastPathSegment();
+    }
+
+    private static String typeFromHints(String name, String mime) {
+        String lower = name == null ? "" : name.toLowerCase(Locale.US);
+        if (lower.endsWith(".epub")) return "epub";
+        if (lower.endsWith(".txt")) return "txt";
+        if ("application/epub+zip".equals(mime)) return "epub";
+        if (mime != null && mime.startsWith("text/")) return "txt";
+        return null;
+    }
+
+    private static boolean looksLikeEpub(File file) {
+        if (file == null || !file.isFile() || file.length() < 4) return false;
+        try (ZipFile zip = new ZipFile(file)) {
+            ZipEntry container = zip.getEntry("META-INF/container.xml");
+            if (container == null) return false;
+            ZipEntry mimetype = zip.getEntry("mimetype");
+            if (mimetype == null) return true;
+            try (InputStream in = zip.getInputStream(mimetype)) {
+                byte[] bytes = new byte[64];
+                int n = in.read(bytes);
+                if (n <= 0) return true;
+                String value = new String(bytes, 0, n, StandardCharsets.US_ASCII).trim();
+                return "application/epub+zip".equals(value);
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private static String readUtf8(File file) throws Exception {
