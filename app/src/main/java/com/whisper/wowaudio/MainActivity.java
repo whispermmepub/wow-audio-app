@@ -14,8 +14,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
-import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -27,13 +25,22 @@ import android.widget.Toast;
 import androidx.core.content.ContextCompat;
 
 import java.util.List;
-import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private static final int PICK_BOOK = 41;
+
+    private static final int NAVY_950 = Color.rgb(7, 27, 69);
+    private static final int NAVY_800 = Color.rgb(14, 52, 117);
+    private static final int NAVY_700 = Color.rgb(24, 42, 108);
+    private static final int PURPLE = Color.rgb(98, 82, 215);
+    private static final int CYAN = Color.rgb(98, 231, 255);
+    private static final int PAGE = Color.rgb(246, 248, 253);
+    private static final int INK = Color.rgb(20, 33, 61);
+    private static final int MUTED = Color.rgb(91, 105, 132);
+
     private BookStore store;
     private LinearLayout content;
-    private TextView voiceStatus;
+
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String message = intent.getStringExtra(ReadingService.EXTRA_MESSAGE);
@@ -64,7 +71,6 @@ public final class MainActivity extends Activity {
                 new IntentFilter(ReadingService.ACTION_STATE),
                 ContextCompat.RECEIVER_NOT_EXPORTED);
         refresh();
-        probeMyanmarVoice();
     }
 
     @Override protected void onPause() {
@@ -75,67 +81,82 @@ public final class MainActivity extends Activity {
     private void buildShell() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        scroll.setBackgroundColor(PAGE);
         content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(18), dp(22), dp(18), dp(32));
-        content.setBackgroundColor(Color.rgb(247, 244, 237));
+        content.setPadding(dp(16), dp(18), dp(16), dp(36));
         scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
         setContentView(scroll);
     }
 
     private void refresh() {
         content.removeAllViews();
+        content.addView(hero());
 
-        TextView title = heading("WoW Audio", 28);
-        content.addView(title);
-        content.addView(text("စာအုပ်ထည့်ပါ။ Play နှိပ်ပါ။ မြန်မာလို တိုက်ရိုက်ဖတ်ပေးမယ်။", 16, false), marginTop(6));
-
-        Button add = primary("＋ Add Book");
+        Button add = primary("＋  Add Book");
+        add.setContentDescription("Add EPUB or text book");
         add.setOnClickListener(v -> pickBook());
-        content.addView(add, marginTop(18));
+        content.addView(add, marginTop(16));
 
-        voiceStatus = text("Checking Myanmar voice…", 14, true);
-        voiceStatus.setContentDescription("Myanmar text to speech status");
-        content.addView(voiceStatus, marginTop(14));
-
-        Button ttsSettings = secondary("Text-to-speech settings");
-        ttsSettings.setOnClickListener(v -> openTtsSettings());
-        content.addView(ttsSettings, marginTop(8));
+        TextView builtIn = statusChip("●  Built-in Myanmar Voice   •   Offline");
+        builtIn.setContentDescription("Built in Myanmar voice. Offline. No extra text to speech app or internet required.");
+        content.addView(builtIn, marginTop(12));
 
         List<BookStore.Book> books = store.list();
         if (books.isEmpty()) {
             LinearLayout empty = card();
-            empty.addView(heading("No books yet", 20));
-            empty.addView(text("EPUB သို့မဟုတ် UTF-8 TXT ဖိုင်ကို Add Book နဲ့ထည့်ပါ။", 15, false), marginTop(6));
-            content.addView(empty, marginTop(22));
+            empty.addView(heading("စာအုပ် မရှိသေးပါ", 20, INK));
+            empty.addView(text("EPUB သို့မဟုတ် UTF-8 TXT ဖိုင်ကို Add Book နှိပ်ပြီး ထည့်ပါ။ ပြီးရင် Play တစ်ချက်နှိပ်ရုံပါ။", 15, MUTED, false), marginTop(8));
+            content.addView(empty, marginTop(20));
             return;
         }
 
-        TextView library = heading("Library", 22);
+        TextView library = heading("Library", 22, INK);
+        library.setContentDescription("Library. " + books.size() + " books.");
         content.addView(library, marginTop(24));
         for (BookStore.Book book : books) content.addView(bookCard(book), marginTop(12));
     }
 
+    private View hero() {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(20), dp(22), dp(20), dp(22));
+        GradientDrawable bg = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{NAVY_950, NAVY_800, NAVY_700});
+        bg.setCornerRadius(dp(24));
+        hero.setBackground(bg);
+        if (Build.VERSION.SDK_INT >= 21) hero.setElevation(dp(5));
+
+        TextView eyebrow = text("WoW • ACCESSIBLE READING", 12, CYAN, true);
+        eyebrow.setLetterSpacing(0.08f);
+        hero.addView(eyebrow);
+        hero.addView(heading("WoW Audio", 30, Color.WHITE), marginTop(8));
+        hero.addView(text("ဖိုင်ထည့် • Play နှိပ် • မြန်မာလို တိုက်ရိုက်ဖတ်", 17, Color.rgb(223, 235, 255), false), marginTop(6));
+        hero.addView(text("API key မလို • အင်တာနက်မလို • TTS app အပိုမလို", 14, Color.rgb(185, 214, 255), false), marginTop(9));
+        return hero;
+    }
+
     private View bookCard(BookStore.Book book) {
         LinearLayout card = card();
-        TextView name = heading(book.title, 20);
+        TextView name = heading(book.title, 20, INK);
         name.setContentDescription("Book: " + book.title);
         card.addView(name);
         if (book.author != null && !book.author.trim().isEmpty()) {
-            card.addView(text(book.author, 14, false), marginTop(3));
+            card.addView(text(book.author, 14, MUTED, false), marginTop(4));
         }
-        card.addView(text(book.originalName, 12, false), marginTop(4));
+        card.addView(text(book.originalName, 12, Color.rgb(124, 137, 160), false), marginTop(5));
 
         boolean resumed = hasProgress(book.id);
-        Button play = primary(resumed ? "▶ Resume" : "▶ Play");
-        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title);
+        Button play = primary(resumed ? "▶  Resume" : "▶  Play");
+        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title + " with built in Myanmar voice");
         play.setOnClickListener(v -> play(book));
-        card.addView(play, marginTop(14));
+        card.addView(play, marginTop(15));
 
-        Button delete = secondary("Delete Book");
-        delete.setContentDescription("Delete " + book.title);
+        Button delete = deleteButton("Delete Book");
+        delete.setContentDescription("Delete " + book.title + " from WoW Audio");
         delete.setOnClickListener(v -> confirmDelete(book));
-        card.addView(delete, marginTop(8));
+        card.addView(delete, marginTop(9));
         return card;
     }
 
@@ -170,10 +191,9 @@ public final class MainActivity extends Activity {
     }
 
     private void importUri(Uri uri) {
-        if (uri == null) return;
         final AlertDialog progress = new AlertDialog.Builder(this)
                 .setTitle("Adding book")
-                .setMessage("Reading the file…")
+                .setMessage("စာအုပ်ကို Library ထဲ ထည့်နေပါတယ်…")
                 .setCancelable(false)
                 .create();
         progress.show();
@@ -209,7 +229,7 @@ public final class MainActivity extends Activity {
     private void confirmDelete(BookStore.Book book) {
         new AlertDialog.Builder(this)
                 .setTitle("Delete book?")
-                .setMessage(book.title + "\n\nThis removes the private copy and saved reading position from WoW Audio.")
+                .setMessage(book.title + "\n\nWoW Audio ထဲက private copy နဲ့ saved reading position ကို ဖျက်ပါမယ်။ မူရင်းဖိုင်ကို မဖျက်ပါ။")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (d, w) -> {
                     Intent stop = new Intent(this, ReadingService.class).setAction(ReadingService.ACTION_STOP);
@@ -224,56 +244,19 @@ public final class MainActivity extends Activity {
     }
 
     private boolean hasProgress(String id) {
-        return getSharedPreferences("reading_progress", MODE_PRIVATE).getInt(id + ":chunk", 0) > 0 ||
-                getSharedPreferences("reading_progress", MODE_PRIVATE).getInt(id + ":offset", 0) > 0;
-    }
-
-    private void probeMyanmarVoice() {
-        if (voiceStatus == null) return;
-        voiceStatus.setText("Checking Myanmar voice…");
-        final TextToSpeech[] probe = new TextToSpeech[1];
-        probe[0] = new TextToSpeech(getApplicationContext(), status -> {
-            TextToSpeech t = probe[0];
-            if (voiceStatus == null || isFinishing()) {
-                if (t != null) t.shutdown();
-                return;
-            }
-            if (status != TextToSpeech.SUCCESS || t == null) {
-                voiceStatus.setText("Myanmar voice: TTS engine unavailable");
-            } else {
-                int result = t.isLanguageAvailable(new Locale("my", "MM"));
-                if (result < TextToSpeech.LANG_AVAILABLE) result = t.isLanguageAvailable(new Locale("my"));
-                voiceStatus.setText(result >= TextToSpeech.LANG_AVAILABLE
-                        ? "Myanmar voice: Ready ✓"
-                        : "Myanmar voice: Not available in the current TTS engine");
-            }
-            if (t != null) t.shutdown();
-        });
-    }
-
-    private void openTtsSettings() {
-        try {
-            startActivity(new Intent("com.android.settings.TTS_SETTINGS"));
-        } catch (Exception e) {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-        }
-    }
-
-    private void requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 55);
-        }
+        return getSharedPreferences("reading_progress", MODE_PRIVATE).getInt(id + ":chunk", 0) > 0;
     }
 
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        card.setPadding(dp(17), dp(17), dp(17), dp(17));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(18));
-        bg.setStroke(dp(1), Color.rgb(225, 219, 207));
+        bg.setCornerRadius(dp(20));
+        bg.setStroke(dp(1), Color.rgb(220, 228, 243));
         card.setBackground(bg);
+        if (Build.VERSION.SDK_INT >= 21) card.setElevation(dp(2));
         return card;
     }
 
@@ -282,55 +265,75 @@ public final class MainActivity extends Activity {
         b.setText(label);
         b.setAllCaps(false);
         b.setTextSize(17);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         b.setTextColor(Color.WHITE);
-        b.setMinHeight(dp(58));
+        b.setMinHeight(dp(60));
         b.setContentDescription(label);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(48, 48, 43));
-        bg.setCornerRadius(dp(16));
+        GradientDrawable bg = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{NAVY_800, PURPLE});
+        bg.setCornerRadius(dp(17));
         b.setBackground(bg);
         return b;
     }
 
-    private Button secondary(String label) {
+    private Button deleteButton(String label) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(16);
-        b.setTextColor(Color.rgb(35, 35, 32));
+        b.setTextSize(15);
+        b.setTextColor(Color.rgb(154, 44, 65));
         b.setMinHeight(dp(54));
-        b.setContentDescription(label);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(235, 231, 221));
+        bg.setColor(Color.rgb(255, 246, 248));
         bg.setCornerRadius(dp(15));
+        bg.setStroke(dp(1), Color.rgb(239, 201, 210));
         b.setBackground(bg);
         return b;
     }
 
-    private TextView heading(String value, float size) {
-        TextView t = text(value, size, true);
+    private TextView statusChip(String value) {
+        TextView t = text(value, 14, NAVY_800, true);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(12), dp(11), dp(12), dp(11));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(232, 246, 255));
+        bg.setCornerRadius(dp(16));
+        bg.setStroke(dp(1), Color.rgb(167, 219, 245));
+        t.setBackground(bg);
+        return t;
+    }
+
+    private TextView heading(String value, float size, int color) {
+        TextView t = text(value, size, color, true);
         if (Build.VERSION.SDK_INT >= 28) t.setAccessibilityHeading(true);
         return t;
     }
 
-    private TextView text(String value, float size, boolean bold) {
+    private TextView text(String value, float size, int color, boolean bold) {
         TextView t = new TextView(this);
         t.setText(value);
         t.setTextSize(size);
-        t.setTextColor(Color.rgb(27, 28, 27));
+        t.setTextColor(color);
         t.setGravity(Gravity.START);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return t;
     }
 
-    private LinearLayout.LayoutParams marginTop(int dp) {
+    private LinearLayout.LayoutParams marginTop(int value) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.topMargin = dp(dp);
+        p.topMargin = dp(value);
         return p;
     }
 
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 55);
+        }
     }
 
     private static String safeMessage(Throwable t) {
