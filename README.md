@@ -1,25 +1,37 @@
-# WoW Audio — Clean Rebuild
+# WoW Audio
 
-A simple Myanmar-first accessible reading app.
+A free, non-commercial, Myanmar-first accessible audiobook reader.
 
 ## Product rule
 
-**Add a book → tap Play → hear it read aloud.**
+**Add an EPUB/TXT → tap Play → hear natural Burmese.**
 
-No chapter generation workflow, no audio-cache preparation screen, and no required cloud account in the core experience.
+WoW Audio is designed for a simple TalkBack-first daily flow. Users do not need to generate a whole book, configure an API key, run a server, or maintain a Railway account.
 
-## First clean build
+## WoW Audio v1.1
 
-- EPUB and UTF-8 TXT import
-- direct Android TextToSpeech playback
-- Myanmar locale request (`my-MM`)
-- foreground reading service for screen-off playback
-- Play / Pause / Resume
-- persistent reading position
-- delete books from the private library
-- ACTION_VIEW / ACTION_SEND import
-- TalkBack-friendly large controls
+- Natural Myanmar voices: **Nilar** and **Thiha**
+- Nilar is the default; voice can be changed with one tap
+- Direct online natural speech for uncached text; no user account/API key setup
+- Persistent per-book audio cache — already-heard speech is not deleted
+- Exact resume using segment + millisecond position
+- Back 15 seconds / Forward 15 seconds
+- Pause / Resume / Stop
+- Prefetch the next three speech segments while listening
+- Bundled offline Burmese MMS/VITS voice as emergency fallback
+- EPUB and UTF-8 TXT private library
+- Telegram / File Manager **Open with**
+- Share and SEND_MULTIPLE import
+- Delete Book removes WoW Audio's private copy, cached speech and saved position, but never the original external file
+- Background/notification playback controls
+- Navy premium visual family shared with WoW Reader
 
-The app uses the Android TextToSpeech API. Actual Myanmar speech depends on an installed TTS engine that reports Myanmar support. Google Translate being able to speak Burmese does not guarantee that the Google Android system TTS engine exposes Burmese to third-party apps.
+## Natural voice reliability
 
-Old experiments are archived outside main. This rebuild starts with a new application signing line.
+The Nilar/Thiha path currently uses the Microsoft Edge Read Aloud consumer WebSocket protocol directly from the app. It is an unofficial consumer endpoint rather than the supported Azure Speech API, so it can change without notice. The provider is isolated in `EdgeMyanmarTtsClient` and the bundled offline voice remains available as fallback.
+
+No WoW Audio owner backend or Railway service is required.
+
+## Licensing
+
+WoW Audio is free/non-commercial. The bundled offline fallback uses Sherpa-ONNX and the Meta MMS Burmese model; see `THIRD_PARTY_NOTICES.md` and the in-app notice for attribution and applicable licenses.

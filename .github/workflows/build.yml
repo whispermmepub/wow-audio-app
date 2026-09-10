@@ -1,4 +1,4 @@
-name: Build clean WoW Audio
+name: Build WoW Audio natural Myanmar player
 
 on:
   push:
@@ -26,10 +26,10 @@ jobs:
       - name: Install Android 16 SDK
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"'
 
-      - name: Fetch pinned offline Burmese TTS runtime and model
+      - name: Fetch pinned offline Burmese fallback
         run: bash tools/fetch_offline_tts.sh
 
-      - name: Smoke-test Burmese model on Linux
+      - name: Smoke-test offline Burmese fallback
         shell: bash
         run: |
           set -euo pipefail
@@ -42,18 +42,14 @@ jobs:
           tokens = "app/src/main/assets/tts/mya/tokens.txt"
           config = sherpa_onnx.OfflineTtsConfig(
               model=sherpa_onnx.OfflineTtsModelConfig(
-                  vits=sherpa_onnx.OfflineTtsVitsModelConfig(
-                      model=model,
-                      tokens=tokens,
-                      data_dir="",
-                  ),
+                  vits=sherpa_onnx.OfflineTtsVitsModelConfig(model=model, tokens=tokens, data_dir=""),
                   num_threads=2,
                   debug=False,
                   provider="cpu",
               ),
               max_num_sentences=1,
           )
-          assert config.validate(), "Sherpa rejected the Burmese VITS config"
+          assert config.validate(), "Sherpa rejected the Burmese VITS fallback config"
           tts = sherpa_onnx.OfflineTts(config)
           audio = tts.generate("မင်္ဂလာပါ မြန်မာနိုင်ငံ", sid=0, speed=1.0)
           samples = list(audio.samples)
@@ -61,70 +57,93 @@ jobs:
           rate = int(audio.sample_rate)
           peak = max(abs(float(x)) for x in samples) if samples else 0.0
           rms = math.sqrt(sum(float(x) * float(x) for x in samples) / count) if count else 0.0
-          print(f"Burmese model smoke test: {count} samples at {rate} Hz, rms={rms:.6f}, peak={peak:.6f}")
-          assert rate > 0, "Invalid sample rate"
-          assert count > 1000, "Burmese model produced too little audio"
-          assert rms > 0.00001 and peak > 0.00010, "Burmese model produced silent audio"
+          print(f"Offline fallback: {count} samples at {rate} Hz, rms={rms:.6f}, peak={peak:.6f}")
+          assert rate > 0 and count > 1000
+          assert rms > 0.00001 and peak > 0.00010
           PY
 
-      - name: Verify built-in Myanmar reader contract
+      - name: Smoke-test Nilar and Thiha natural online voices
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet "edge-tts==7.2.8"
+          edge-tts --list-voices > /tmp/voices.txt
+          grep -q 'my-MM-NilarNeural' /tmp/voices.txt
+          grep -q 'my-MM-ThihaNeural' /tmp/voices.txt
+          edge-tts --voice my-MM-NilarNeural --text 'မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။' --write-media /tmp/nilar.mp3
+          edge-tts --voice my-MM-ThihaNeural --text 'မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။' --write-media /tmp/thiha.mp3
+          test "$(stat -c%s /tmp/nilar.mp3)" -gt 3000
+          test "$(stat -c%s /tmp/thiha.mp3)" -gt 3000
+          file /tmp/nilar.mp3 /tmp/thiha.mp3
+          ls -lh /tmp/nilar.mp3 /tmp/thiha.mp3
+
+      - name: Verify v1.1 natural audiobook contract
         shell: bash
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
-          grep -q "versionCode 2" app/build.gradle
-          grep -q "versionName '1.0.1'" app/build.gradle
-          grep -q "class MmsMyanmarTtsEngine" app/src/main/java/com/whisper/wowaudio/MmsMyanmarTtsEngine.java
-          grep -q "OfflineTts" app/src/main/java/com/whisper/wowaudio/MmsMyanmarTtsEngine.java
-          grep -q "MediaPlayer" app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q "WavFile.writeMonoPcm16" app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q "validateAudible" app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q "Built-in Myanmar Voice" app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q "Delete Book" app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q "ACTION_OPEN_DOCUMENT" app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q "SEND_MULTIPLE" app/src/main/AndroidManifest.xml
-          grep -q "ShareImportActivity" app/src/main/AndroidManifest.xml
+          grep -q "versionCode 3" app/build.gradle
+          grep -q "versionName '1.1.0'" app/build.gradle
+          grep -q "okhttp:4.12.0" app/build.gradle
+          grep -q "testImplementation 'junit:junit:4.13.2'" app/build.gradle
+          grep -q 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          grep -q 'class EdgeMyanmarTtsClient' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'my-MM-ThihaNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'class SpeechCache' app/src/main/java/com/whisper/wowaudio/SpeechCache.java
+          grep -q 'PREFETCH_COUNT = 3' app/src/main/java/com/whisper/wowaudio/ReadingService.java
+          grep -q 'ACTION_SEEK_BACK' app/src/main/java/com/whisper/wowaudio/ReadingService.java
+          grep -q 'ACTION_SEEK_FORWARD' app/src/main/java/com/whisper/wowaudio/ReadingService.java
+          grep -q 'saveProgress(bookId, segmentIndex, activePositionMs)' app/src/main/java/com/whisper/wowaudio/ReadingService.java
+          grep -q 'Nilar' app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q 'Thiha' app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q '↶ 15s' app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q '15s ↷' app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q 'Delete Book' app/src/main/java/com/whisper/wowaudio/MainActivity.java
+          grep -q 'javaClientDownloadsNilarAndThihaMp3' app/src/test/java/com/whisper/wowaudio/EdgeMyanmarTtsClientTest.java
+          grep -q 'SEND_MULTIPLE' app/src/main/AndroidManifest.xml
+          grep -q 'ShareImportActivity' app/src/main/AndroidManifest.xml
           test -s app/src/main/assets/tts/mya/model.onnx
           test -s app/src/main/assets/tts/mya/tokens.txt
           test -s app/libs/sherpa-onnx-1.13.7.aar
-          if grep -R -q "android.speech.tts.TextToSpeech\|org.saomaicenter.myanmartts\|GeminiTtsClient\|GenerationQueueStore\|NarrationGenerationService" app/src/main/java app/src/main/AndroidManifest.xml; then
-            echo "Old/external speech architecture found in v1.0.1"
+          if test -d server; then
+            echo 'Owner backend/server directory must not exist in v1.1'
             exit 1
           fi
           git diff --check
 
-      - name: Build and lint
-        run: gradle :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
+      - name: Test exact Java client, build and lint
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
 
-      - name: Verify APK identity and bundled voice
+      - name: Verify APK identity and fallback assets
         shell: bash
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='2'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.0.1'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='3'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.1.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
-          unzip -l "$APK" | grep -q "assets/tts/mya/model.onnx"
-          unzip -l "$APK" | grep -q "assets/tts/mya/tokens.txt"
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libsherpa-onnx-jni.so"
-          unzip -l "$APK" | grep -q "assets/THIRD_PARTY_NOTICES.txt"
+          unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
+          unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
+          unzip -l "$APK" | grep -q 'assets/THIRD_PARTY_NOTICES.txt'
           ls -lh "$APK"
 
-      - name: Upload v1.0.1 real-device audio test APK
+      - name: Upload v1.1.0 natural Myanmar player test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.0.1-MediaPlayer-Myanmar-TTS-test
+          name: WoW-Audio-v1.1.0-Nilar-Thiha-natural-player-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
 
-      - name: Upload v1.0.1 unsigned release
+      - name: Upload v1.1.0 unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.0.1-MediaPlayer-Myanmar-TTS-release-unsigned
+          name: WoW-Audio-v1.1.0-Nilar-Thiha-natural-player-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
