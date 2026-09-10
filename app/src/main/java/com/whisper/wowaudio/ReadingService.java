@@ -5,7 +5,6 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
@@ -48,7 +47,7 @@ public final class ReadingService extends Service {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            stopReading();
+            stopReading(true);
             return START_NOT_STICKY;
         }
         if (ACTION_TOGGLE.equals(action)) {
@@ -91,7 +90,7 @@ public final class ReadingService extends Service {
                 });
             } catch (Exception e) {
                 broadcast("Cannot read this book: " + safeMessage(e), false);
-                stopSelf();
+                stopReading(false);
             }
         }, "book-loader").start();
     }
@@ -138,13 +137,14 @@ public final class ReadingService extends Service {
                 if (token != generation || paused || book == null) return;
                 chunkIndex++;
                 charOffset = 0;
-                saveProgress();
                 if (chunkIndex >= chunks.size()) {
-                    prefs().edit().putInt(key("chunk"), 0).putInt(key("offset"), 0).apply();
-                    broadcast("Finished " + book.title, false);
-                    stopReading();
+                    String finishedTitle = book.title;
+                    clearProgress();
+                    broadcast("Finished " + finishedTitle, false);
+                    stopReading(false);
                     return;
                 }
+                saveProgress();
                 speakCurrent(token);
             }
 
@@ -174,7 +174,15 @@ public final class ReadingService extends Service {
         if (piece.isEmpty()) {
             chunkIndex++;
             charOffset = 0;
-            speakCurrent(token);
+            if (chunkIndex >= chunks.size()) {
+                String finishedTitle = book.title;
+                clearProgress();
+                broadcast("Finished " + finishedTitle, false);
+                stopReading(false);
+            } else {
+                saveProgress();
+                speakCurrent(token);
+            }
             return;
         }
         paused = false;
@@ -182,6 +190,7 @@ public final class ReadingService extends Service {
         int result = tts.speak(piece, TextToSpeech.QUEUE_FLUSH, null, utterance);
         if (result == TextToSpeech.ERROR) {
             paused = true;
+            saveProgress();
             broadcast("The TTS engine rejected this text. Tap Resume to retry.", false);
             updateNotification("Speech error • tap Resume", false);
         }
@@ -211,8 +220,8 @@ public final class ReadingService extends Service {
         updateNotification(message, false);
     }
 
-    private void stopReading() {
-        saveProgress();
+    private void stopReading(boolean savePosition) {
+        if (savePosition) saveProgress();
         generation++;
         stopTtsOnly();
         book = null;
@@ -236,6 +245,11 @@ public final class ReadingService extends Service {
                 .putInt(key("chunk"), Math.max(0, Math.min(chunkIndex, chunks.size() - 1)))
                 .putInt(key("offset"), Math.max(0, charOffset))
                 .apply();
+    }
+
+    private void clearProgress() {
+        if (book == null) return;
+        prefs().edit().remove(key("chunk")).remove(key("offset")).apply();
     }
 
     private String progressText() {
