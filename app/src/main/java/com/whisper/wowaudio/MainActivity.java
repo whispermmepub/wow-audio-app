@@ -45,14 +45,22 @@ public final class MainActivity extends Activity {
 
     private BookStore store;
     private LinearLayout content;
+    private TextView playerStatus;
+    private Button toggleControl;
+    private boolean lastPlaying;
+    private String lastStatus = "Ready";
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String message = intent.getStringExtra(ReadingService.EXTRA_MESSAGE);
-            if (message != null && !message.isEmpty()) {
+            lastPlaying = intent.getBooleanExtra(ReadingService.EXTRA_PLAYING, false);
+            if (message != null && !message.trim().isEmpty()) lastStatus = message;
+            updatePlayerStatus();
+            if (message != null && (message.startsWith("Myanmar voice failed")
+                    || message.startsWith("Finished")
+                    || message.startsWith("Natural voice unavailable"))) {
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
             }
-            refresh();
         }
     };
 
@@ -60,6 +68,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         store = new BookStore(this);
         buildShell();
+        refresh();
         handleLaunchIntent(getIntent());
     }
 
@@ -105,18 +114,8 @@ public final class MainActivity extends Activity {
         add.setOnClickListener(v -> pickBook());
         content.addView(add, marginTop(16));
 
-        LinearLayout voiceCard = card();
-        voiceCard.addView(heading("Built-in Myanmar Voice", 18, INK));
-        TextView voiceStatus = text(
-                "Offline • No TTS app • No API key • No internet",
-                14, NAVY_800, true);
-        voiceStatus.setContentDescription(
-                "Built in Myanmar voice. Offline. No extra text to speech app, API key, or internet required.");
-        voiceCard.addView(voiceStatus, marginTop(6));
-        voiceCard.addView(text(
-                "WoW Audio ဖွင့်ထားတဲ့ EPUB/TXT ကို ဖုန်းထဲမှာပဲ မြန်မာအသံအဖြစ် ပြောင်းပြီး တိုက်ရိုက်ဖတ်ပေးပါတယ်။",
-                14, MUTED, false), marginTop(8));
-        content.addView(voiceCard, marginTop(14));
+        content.addView(voiceCard(), marginTop(14));
+        content.addView(playerCard(), marginTop(14));
 
         List<BookStore.Book> books = store.list();
         if (books.isEmpty()) {
@@ -154,9 +153,66 @@ public final class MainActivity extends Activity {
         hero.addView(heading("WoW Audio", 30, Color.WHITE), marginTop(8));
         hero.addView(text("ဖိုင်ထည့် • Play နှိပ် • မြန်မာလို နားထောင်", 17,
                 Color.rgb(223, 235, 255), false), marginTop(6));
-        hero.addView(text("Built-in offline Myanmar voice • Telegram / File Manager", 14,
+        hero.addView(text("Natural Myanmar • Nilar / Thiha • Open with / Share", 14,
                 Color.rgb(185, 214, 255), false), marginTop(9));
         return hero;
+    }
+
+    private View voiceCard() {
+        LinearLayout card = card();
+        card.addView(heading("Myanmar Voice", 18, INK));
+        String selected = selectedVoice();
+        String label = EdgeMyanmarTtsClient.VOICE_THIHA.equals(selected) ? "Thiha" : "Nilar";
+        TextView status = text("Natural online • " + label, 14, NAVY_800, true);
+        status.setContentDescription("Selected Myanmar voice: " + label + ". Natural online voice.");
+        card.addView(status, marginTop(6));
+        card.addView(text(
+                "Account/API key/server မလိုပါ။ အသံအသစ်ရယူချိန် Internet လိုပြီး နားထောင်ပြီးသားအပိုင်းတွေကို ဖုန်းထဲ cache သိမ်းထားပါတယ်။ Online မရရင် offline backup အသံကိုသုံးပါမယ်။",
+                14, MUTED, false), marginTop(8));
+
+        LinearLayout row = horizontalRow();
+        Button nilar = voiceButton("Nilar", !EdgeMyanmarTtsClient.VOICE_THIHA.equals(selected));
+        nilar.setContentDescription("Use Nilar natural Myanmar voice");
+        nilar.setOnClickListener(v -> selectVoice(EdgeMyanmarTtsClient.VOICE_NILAR));
+        row.addView(nilar, weightedButtonParams(0));
+
+        Button thiha = voiceButton("Thiha", EdgeMyanmarTtsClient.VOICE_THIHA.equals(selected));
+        thiha.setContentDescription("Use Thiha natural Myanmar voice");
+        thiha.setOnClickListener(v -> selectVoice(EdgeMyanmarTtsClient.VOICE_THIHA));
+        row.addView(thiha, weightedButtonParams(10));
+        card.addView(row, marginTop(12));
+        return card;
+    }
+
+    private View playerCard() {
+        LinearLayout card = card();
+        card.addView(heading("Player", 18, INK));
+        playerStatus = text(lastStatus, 14, MUTED, false);
+        playerStatus.setContentDescription("Player status: " + lastStatus);
+        card.addView(playerStatus, marginTop(6));
+
+        LinearLayout row = horizontalRow();
+        Button back = compactControl("↶ 15s");
+        back.setContentDescription("Go back 15 seconds");
+        back.setOnClickListener(v -> sendPlayerAction(ReadingService.ACTION_SEEK_BACK));
+        row.addView(back, weightedButtonParams(0));
+
+        toggleControl = compactControl(lastPlaying ? "Pause" : "Play / Resume");
+        toggleControl.setContentDescription("Pause or resume current book");
+        toggleControl.setOnClickListener(v -> sendPlayerAction(ReadingService.ACTION_TOGGLE));
+        row.addView(toggleControl, weightedButtonParams(8));
+
+        Button forward = compactControl("15s ↷");
+        forward.setContentDescription("Go forward 15 seconds");
+        forward.setOnClickListener(v -> sendPlayerAction(ReadingService.ACTION_SEEK_FORWARD));
+        row.addView(forward, weightedButtonParams(8));
+        card.addView(row, marginTop(12));
+
+        Button stop = secondary("Stop");
+        stop.setContentDescription("Stop reading and save position");
+        stop.setOnClickListener(v -> sendPlayerAction(ReadingService.ACTION_STOP));
+        card.addView(stop, marginTop(9));
+        return card;
     }
 
     private View bookCard(BookStore.Book book) {
@@ -171,7 +227,7 @@ public final class MainActivity extends Activity {
 
         boolean resumed = hasProgress(book.id);
         Button play = primary(resumed ? "▶  Resume" : "▶  Play");
-        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title + " with built in Myanmar voice");
+        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title);
         play.setOnClickListener(v -> play(book));
         card.addView(play, marginTop(15));
 
@@ -184,12 +240,43 @@ public final class MainActivity extends Activity {
 
     private TextView attribution() {
         TextView t = text(
-                "Free • Non-commercial • Built with Sherpa-ONNX and Meta MMS Burmese voice",
+                "Free • Non-commercial • Natural online voice with offline Burmese fallback",
                 12, Color.rgb(120, 132, 154), false);
         t.setGravity(Gravity.CENTER);
         t.setContentDescription(
-                "WoW Audio is free and non-commercial. Built with Sherpa ONNX and Meta MMS Burmese voice.");
+                "WoW Audio is free and non-commercial. Natural online Myanmar voice with offline Burmese fallback.");
         return t;
+    }
+
+    private void selectVoice(String voice) {
+        getSharedPreferences(ReadingService.PREFS_VOICE, MODE_PRIVATE)
+                .edit().putString(ReadingService.KEY_VOICE, voice).apply();
+        String label = EdgeMyanmarTtsClient.VOICE_THIHA.equals(voice) ? "Thiha" : "Nilar";
+        Toast.makeText(this, label + " selected • press Play or Resume", Toast.LENGTH_SHORT).show();
+        refresh();
+    }
+
+    private String selectedVoice() {
+        String voice = getSharedPreferences(ReadingService.PREFS_VOICE, MODE_PRIVATE)
+                .getString(ReadingService.KEY_VOICE, ReadingService.DEFAULT_VOICE);
+        return EdgeMyanmarTtsClient.VOICE_THIHA.equals(voice)
+                ? EdgeMyanmarTtsClient.VOICE_THIHA : EdgeMyanmarTtsClient.VOICE_NILAR;
+    }
+
+    private void sendPlayerAction(String action) {
+        try {
+            startService(new Intent(this, ReadingService.class).setAction(action));
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Player unavailable: " + safeMessage(e), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updatePlayerStatus() {
+        if (playerStatus != null) {
+            playerStatus.setText(lastStatus);
+            playerStatus.setContentDescription("Player status: " + lastStatus);
+        }
+        if (toggleControl != null) toggleControl.setText(lastPlaying ? "Pause" : "Play / Resume");
     }
 
     private void pickBook() {
@@ -315,7 +402,9 @@ public final class MainActivity extends Activity {
                 .putExtra(ReadingService.EXTRA_BOOK_ID, book.id);
         try {
             ContextCompat.startForegroundService(this, service);
-            Toast.makeText(this, "Starting " + book.title, Toast.LENGTH_SHORT).show();
+            lastStatus = "Starting " + book.title;
+            lastPlaying = false;
+            updatePlayerStatus();
         } catch (RuntimeException e) {
             new AlertDialog.Builder(this)
                     .setTitle("Could not start reading")
@@ -329,12 +418,11 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Delete book?")
                 .setMessage(book.title
-                        + "\n\nWoW Audio ထဲက private copy နဲ့ saved reading position ကို ဖျက်ပါမယ်။ မူရင်းဖိုင်ကို မဖျက်ပါ။")
+                        + "\n\nWoW Audio ထဲက private copy၊ cached audio နဲ့ saved reading position ကို ဖျက်ပါမယ်။ မူရင်း EPUB/TXT ကို မဖျက်ပါ။")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Delete", (d, w) -> {
                     try {
-                        Intent stop = new Intent(this, ReadingService.class).setAction(ReadingService.ACTION_STOP);
-                        startService(stop);
+                        startService(new Intent(this, ReadingService.class).setAction(ReadingService.ACTION_STOP));
                     } catch (RuntimeException ignored) { }
                     boolean deleted = store.delete(book.id);
                     getSharedPreferences("reading_progress", MODE_PRIVATE).edit()
@@ -355,6 +443,13 @@ public final class MainActivity extends Activity {
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 55);
         }
+    }
+
+    private LinearLayout horizontalRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        return row;
     }
 
     private LinearLayout card() {
@@ -378,11 +473,63 @@ public final class MainActivity extends Activity {
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         b.setTextColor(Color.WHITE);
         b.setMinHeight(dp(60));
-        b.setContentDescription(label);
         GradientDrawable bg = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 new int[]{NAVY_800, PURPLE});
         bg.setCornerRadius(dp(17));
+        b.setBackground(bg);
+        return b;
+    }
+
+    private Button voiceButton(String label, boolean selected) {
+        Button b = new Button(this);
+        b.setText(label + (selected ? " ✓" : ""));
+        b.setAllCaps(false);
+        b.setTextSize(16);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setMinHeight(dp(58));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(15));
+        if (selected) {
+            b.setTextColor(Color.WHITE);
+            bg.setColor(NAVY_800);
+        } else {
+            b.setTextColor(NAVY_800);
+            bg.setColor(Color.rgb(238, 243, 252));
+            bg.setStroke(dp(1), Color.rgb(197, 211, 237));
+        }
+        b.setBackground(bg);
+        return b;
+    }
+
+    private Button compactControl(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(14);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setTextColor(NAVY_800);
+        b.setMinHeight(dp(60));
+        b.setPadding(dp(4), 0, dp(4), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(238, 243, 252));
+        bg.setCornerRadius(dp(15));
+        bg.setStroke(dp(1), Color.rgb(197, 211, 237));
+        b.setBackground(bg);
+        return b;
+    }
+
+    private Button secondary(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(15);
+        b.setTextColor(NAVY_800);
+        b.setMinHeight(dp(54));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(238, 243, 252));
+        bg.setCornerRadius(dp(15));
+        bg.setStroke(dp(1), Color.rgb(197, 211, 237));
         b.setBackground(bg);
         return b;
     }
@@ -424,12 +571,19 @@ public final class MainActivity extends Activity {
         return p;
     }
 
+    private LinearLayout.LayoutParams weightedButtonParams(int leftMarginDp) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1f);
+        p.leftMargin = dp(leftMarginDp);
+        return p;
+    }
+
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private static String safeMessage(Throwable t) {
-        String m = t.getMessage();
-        return m == null || m.trim().isEmpty() ? t.getClass().getSimpleName() : m;
+        String m = t == null ? null : t.getMessage();
+        return m == null || m.trim().isEmpty()
+                ? (t == null ? "Unknown error" : t.getClass().getSimpleName()) : m;
     }
 }
