@@ -20,10 +20,11 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.core.content.ContextCompat;
 
 import java.util.List;
 import java.util.Locale;
@@ -33,7 +34,6 @@ public final class MainActivity extends Activity {
     private BookStore store;
     private LinearLayout content;
     private TextView voiceStatus;
-    private boolean handledLaunchIntent;
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String message = intent.getStringExtra(ReadingService.EXTRA_MESSAGE);
@@ -58,11 +58,11 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(stateReceiver, new IntentFilter(ReadingService.ACTION_STATE), RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(stateReceiver, new IntentFilter(ReadingService.ACTION_STATE));
-        }
+        ContextCompat.registerReceiver(
+                this,
+                stateReceiver,
+                new IntentFilter(ReadingService.ACTION_STATE),
+                ContextCompat.RECEIVER_NOT_EXPORTED);
         refresh();
         probeMyanmarVoice();
     }
@@ -126,8 +126,9 @@ public final class MainActivity extends Activity {
         }
         card.addView(text(book.originalName, 12, false), marginTop(4));
 
-        Button play = primary(hasProgress(book.id) ? "▶ Resume" : "▶ Play");
-        play.setContentDescription((hasProgress(book.id) ? "Resume " : "Play ") + book.title);
+        boolean resumed = hasProgress(book.id);
+        Button play = primary(resumed ? "▶ Resume" : "▶ Play");
+        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title);
         play.setOnClickListener(v -> play(book));
         card.addView(play, marginTop(14));
 
@@ -201,7 +202,7 @@ public final class MainActivity extends Activity {
         Intent service = new Intent(this, ReadingService.class)
                 .setAction(ReadingService.ACTION_PLAY_BOOK)
                 .putExtra(ReadingService.EXTRA_BOOK_ID, book.id);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
+        ContextCompat.startForegroundService(this, service);
         Toast.makeText(this, "Starting " + book.title, Toast.LENGTH_SHORT).show();
     }
 
