@@ -15,7 +15,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -34,7 +33,6 @@ import java.util.Set;
 
 public final class MainActivity extends Activity {
     private static final int PICK_BOOK = 41;
-    private static final String SM_ENGINE_PACKAGE = "org.saomaicenter.myanmartts";
 
     private static final int NAVY_950 = Color.rgb(7, 27, 69);
     private static final int NAVY_800 = Color.rgb(14, 52, 117);
@@ -62,9 +60,6 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         store = new BookStore(this);
         buildShell();
-        // Deliberately do NOT construct or probe TextToSpeech during startup.
-        // Some broken vendor TTS installs can crash while being probed. WoW Audio
-        // only binds to SM Myanmar TTS after the user explicitly taps Play.
         handleLaunchIntent(getIntent());
     }
 
@@ -111,23 +106,16 @@ public final class MainActivity extends Activity {
         content.addView(add, marginTop(16));
 
         LinearLayout voiceCard = card();
-        voiceCard.addView(heading("Myanmar Voice", 18, INK));
-        boolean smInstalled = isPackageInstalled(SM_ENGINE_PACKAGE);
+        voiceCard.addView(heading("Built-in Myanmar Voice", 18, INK));
         TextView voiceStatus = text(
-                smInstalled
-                        ? "SM Myanmar TTS installed • Play will use it directly"
-                        : "SM Myanmar TTS not installed",
-                14,
-                smInstalled ? NAVY_800 : MUTED,
-                smInstalled);
-        voiceStatus.setContentDescription(smInstalled
-                ? "SM Myanmar TTS is installed. Play will use it directly."
-                : "SM Myanmar TTS is not installed.");
+                "Offline • No TTS app • No API key • No internet",
+                14, NAVY_800, true);
+        voiceStatus.setContentDescription(
+                "Built in Myanmar voice. Offline. No extra text to speech app, API key, or internet required.");
         voiceCard.addView(voiceStatus, marginTop(6));
-
-        Button settings = secondary("Voice settings");
-        settings.setOnClickListener(v -> openTtsSettings());
-        voiceCard.addView(settings, marginTop(10));
+        voiceCard.addView(text(
+                "WoW Audio ဖွင့်ထားတဲ့ EPUB/TXT ကို ဖုန်းထဲမှာပဲ မြန်မာအသံအဖြစ် ပြောင်းပြီး တိုက်ရိုက်ဖတ်ပေးပါတယ်။",
+                14, MUTED, false), marginTop(8));
         content.addView(voiceCard, marginTop(14));
 
         List<BookStore.Book> books = store.list();
@@ -138,6 +126,7 @@ public final class MainActivity extends Activity {
                     "EPUB သို့မဟုတ် UTF-8 TXT ဖိုင်ကို Add Book နဲ့ထည့်ပါ။ Telegram/File Manager ကနေ Open with သို့မဟုတ် Share နဲ့လည်း တန်းထည့်နိုင်ပါတယ်။",
                     15, MUTED, false), marginTop(8));
             content.addView(empty, marginTop(20));
+            content.addView(attribution(), marginTop(22));
             return;
         }
 
@@ -145,6 +134,7 @@ public final class MainActivity extends Activity {
         library.setContentDescription("Library. " + books.size() + " books.");
         content.addView(library, marginTop(24));
         for (BookStore.Book book : books) content.addView(bookCard(book), marginTop(12));
+        content.addView(attribution(), marginTop(22));
     }
 
     private View hero() {
@@ -164,7 +154,7 @@ public final class MainActivity extends Activity {
         hero.addView(heading("WoW Audio", 30, Color.WHITE), marginTop(8));
         hero.addView(text("ဖိုင်ထည့် • Play နှိပ် • မြန်မာလို နားထောင်", 17,
                 Color.rgb(223, 235, 255), false), marginTop(6));
-        hero.addView(text("Telegram / File Manager • Open with • Share", 14,
+        hero.addView(text("Built-in offline Myanmar voice • Telegram / File Manager", 14,
                 Color.rgb(185, 214, 255), false), marginTop(9));
         return hero;
     }
@@ -181,15 +171,25 @@ public final class MainActivity extends Activity {
 
         boolean resumed = hasProgress(book.id);
         Button play = primary(resumed ? "▶  Resume" : "▶  Play");
-        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title);
+        play.setContentDescription((resumed ? "Resume " : "Play ") + book.title + " with built in Myanmar voice");
         play.setOnClickListener(v -> play(book));
         card.addView(play, marginTop(15));
 
         Button delete = deleteButton("Delete Book");
-        delete.setContentDescription("Delete " + book.title);
+        delete.setContentDescription("Delete " + book.title + " from WoW Audio");
         delete.setOnClickListener(v -> confirmDelete(book));
         card.addView(delete, marginTop(9));
         return card;
+    }
+
+    private TextView attribution() {
+        TextView t = text(
+                "Free • Non-commercial • Built with Sherpa-ONNX and Meta MMS Burmese voice",
+                12, Color.rgb(120, 132, 154), false);
+        t.setGravity(Gravity.CENTER);
+        t.setContentDescription(
+                "WoW Audio is free and non-commercial. Built with Sherpa ONNX and Meta MMS Burmese voice.");
+        return t;
     }
 
     private void pickBook() {
@@ -350,23 +350,6 @@ public final class MainActivity extends Activity {
                 || getSharedPreferences("reading_progress", MODE_PRIVATE).getInt(id + ":offset", 0) > 0;
     }
 
-    private boolean isPackageInstalled(String packageName) {
-        try {
-            getPackageManager().getApplicationInfo(packageName, PackageManager.GET_META_DATA);
-            return true;
-        } catch (PackageManager.NameNotFoundException e) {
-            return false;
-        }
-    }
-
-    private void openTtsSettings() {
-        try {
-            startActivity(new Intent("com.android.settings.TTS_SETTINGS"));
-        } catch (Exception e) {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-        }
-    }
-
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -400,21 +383,6 @@ public final class MainActivity extends Activity {
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 new int[]{NAVY_800, PURPLE});
         bg.setCornerRadius(dp(17));
-        b.setBackground(bg);
-        return b;
-    }
-
-    private Button secondary(String label) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setAllCaps(false);
-        b.setTextSize(15);
-        b.setTextColor(NAVY_800);
-        b.setMinHeight(dp(54));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.rgb(238, 243, 252));
-        bg.setCornerRadius(dp(15));
-        bg.setStroke(dp(1), Color.rgb(197, 211, 237));
         b.setBackground(bg);
         return b;
     }
