@@ -45,7 +45,7 @@ public final class ReadingService extends Service {
     private static final String CHANNEL = "reading";
     private static final int NOTIFICATION_ID = 1001;
     private static final int SEEK_MS = 15_000;
-    private static final int PREFETCH_COUNT = 2;
+    private static final int PREFETCH_COUNT = 3;
 
     private final Object pauseLock = new Object();
     private final Object synthesisLock = new Object();
@@ -82,6 +82,8 @@ public final class ReadingService extends Service {
         if (ACTION_TOGGLE.equals(action)) {
             if (activeBook != null) {
                 if (paused) resumeReading(); else pauseReading();
+            } else {
+                broadcast("Nothing is playing.", false);
             }
             return START_NOT_STICKY;
         }
@@ -95,7 +97,7 @@ public final class ReadingService extends Service {
         }
         if (ACTION_PLAY_BOOK.equals(action)) {
             String id = intent.getStringExtra(EXTRA_BOOK_ID);
-            if (id != null && !id.trim().isEmpty()) startBook(id);
+            if (id != null && !id.trim().isEmpty()) startBook(id, false);
         }
         return START_NOT_STICKY;
     }
@@ -122,10 +124,10 @@ public final class ReadingService extends Service {
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    private void startBook(String id) {
+    private void startBook(String id, boolean startPaused) {
         final long token = ++sessionToken;
         releaseCurrentPlayer();
-        paused = false;
+        paused = startPaused;
         synchronized (pauseLock) { pauseLock.notifyAll(); }
 
         Thread old = worker;
@@ -142,8 +144,8 @@ public final class ReadingService extends Service {
             return;
         }
 
-        startForeground(NOTIFICATION_ID, notification("Preparing natural Myanmar voice…", false));
-        broadcast("Preparing natural Myanmar voice…", false);
+        startForeground(NOTIFICATION_ID, notification(startPaused ? "Paused" : "Preparing natural Myanmar voice…", false));
+        if (!startPaused) broadcast("Preparing natural Myanmar voice…", false);
 
         Thread t = new Thread(() -> readBookLoop(target, token), "wow-natural-reader");
         worker = t;
@@ -160,7 +162,8 @@ public final class ReadingService extends Service {
 
             SharedPreferences p = progressPrefs();
             int index = clamp(p.getInt(key(target.id, "chunk"), 0), 0, segments.size() - 1);
-            int firstPositionMs = Math.max(0, p.getInt(key(target.id, "offset"), 0));
+            final int resumeIndex = index;
+            final int firstPositionMs = Math.max(0, p.getInt(key(target.id, "offset"), 0));
             String voice = selectedVoice();
             float speed = 1.0f;
 
@@ -175,11 +178,10 @@ public final class ReadingService extends Service {
 
                 schedulePrefetch(target, segments, index, voice, speed, token);
 
-                int startMs = index == clamp(p.getInt(key(target.id, "chunk"), 0), 0, segments.size() - 1)
-                        ? firstPositionMs : 0;
+                int startMs = index == resumeIndex ? firstPositionMs : 0;
                 activePositionMs = startMs;
                 updateNotification("Reading • " + voiceLabel(voice) + " • " + (index + 1) + "/" + segments.size(), true);
-                broadcast("Playing " + voiceLabel(voice), true);
+                if (index == resumeIndex) broadcast("Playing " + voiceLabel(voice), true);
 
                 boolean completed = playFileBlocking(audio, target.id, index, startMs, token);
                 if (token != sessionToken) return;
@@ -368,7 +370,7 @@ public final class ReadingService extends Service {
         }
         int target = current + deltaMs;
 
-        if (duration > 0 && target >= 0 && target < duration) {
+        if (duration > 0 && target >= 0 && target < duration && player != null) {
             try {
                 player.seekTo(target);
                 activePositionMs = target;
@@ -380,22 +382,23 @@ public final class ReadingService extends Service {
 
         String voice = selectedVoice();
         float speed = 1.0f;
+        boolean keepPaused = paused;
         if (target < 0 && index > 0) {
             int previousIndex = index - 1;
             File previous = SpeechCache.existing(book, previousIndex, voice, speed, segments.get(previousIndex));
             int previousDuration = durationOf(previous);
             int previousPosition = previousDuration > 0 ? Math.max(0, previousDuration + target) : 0;
             saveProgress(book.id, previousIndex, previousPosition);
-            broadcast("Back 15 seconds", !paused);
-            startBook(book.id);
+            broadcast("Back 15 seconds", !keepPaused);
+            startBook(book.id, keepPaused);
             return;
         }
 
         if (duration > 0 && target >= duration && index + 1 < segments.size()) {
             int nextPosition = Math.max(0, target - duration);
             saveProgress(book.id, index + 1, nextPosition);
-            broadcast("Forward 15 seconds", !paused);
-            startBook(book.id);
+            broadcast("Forward 15 seconds", !keepPaused);
+            startBook(book.id, keepPaused);
             return;
         }
 
@@ -428,7 +431,7 @@ public final class ReadingService extends Service {
         updateNotification(progressText(), true);
 
         Thread t = worker;
-        if (t == null || !t.isAlive()) startBook(book.id);
+        if (t == null || !t.isAlive()) startBook(book.id, false);
     }
 
     private void stopReading(boolean savePosition) {
