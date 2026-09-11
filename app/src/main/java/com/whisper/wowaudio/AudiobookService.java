@@ -10,6 +10,7 @@ import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
+import android.media.PlaybackParams;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -24,8 +25,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * v1.2 audiobook service: one logical book timeline, cached speech segments, Edge/Gemini/offline
- * voice engines, exact per-segment resume, book-level scrub, and background notification controls.
+ * Audiobook service: one logical book timeline, cached speech segments, Edge/Gemini/offline
+ * voice engines, exact per-segment resume, book-level scrub, live speed/tone, and background controls.
  */
 public final class AudiobookService extends Service {
     static final String ACTION_PLAY_BOOK = "com.whisper.wowaudio.v2.PLAY_BOOK";
@@ -37,6 +38,7 @@ public final class AudiobookService extends Service {
     static final String ACTION_NEXT = "com.whisper.wowaudio.v2.NEXT";
     static final String ACTION_STOP = "com.whisper.wowaudio.v2.STOP";
     static final String ACTION_REQUEST_STATE = "com.whisper.wowaudio.v2.REQUEST_STATE";
+    static final String ACTION_NARRATION_SETTINGS_CHANGED = "com.whisper.wowaudio.v2.NARRATION_SETTINGS_CHANGED";
     static final String ACTION_STATE = "com.whisper.wowaudio.v2.STATE";
 
     static final String EXTRA_BOOK_ID = "book_id";
@@ -49,6 +51,9 @@ public final class AudiobookService extends Service {
     static final String EXTRA_SEGMENT_COUNT = "segment_count";
     static final String EXTRA_TEXT = "current_text";
     static final String EXTRA_VOICE_LABEL = "voice_label";
+    static final String EXTRA_SPEED_LABEL = "speed_label";
+    static final String EXTRA_TONE_LABEL = "tone_label";
+    static final String EXTRA_STYLE_LABEL = "style_label";
 
     private static final String CHANNEL = "audiobook_v2";
     private static final int NOTIFICATION_ID = 1201;
@@ -70,6 +75,8 @@ public final class AudiobookService extends Service {
     private volatile int activeDurationMs;
     private volatile String activeText = "";
     private volatile Profile activeProfile;
+    private volatile float activePlaybackSpeed = 1.0f;
+    private volatile float activePlaybackPitch = 1.0f;
     private volatile long edgeRetryAfterMs;
     private volatile long geminiRetryAfterMs;
 
@@ -142,6 +149,10 @@ public final class AudiobookService extends Service {
             jumpSegment(1);
             return START_NOT_STICKY;
         }
+        if (ACTION_NARRATION_SETTINGS_CHANGED.equals(action)) {
+            applyNarrationSettings();
+            return START_NOT_STICKY;
+        }
         if (ACTION_REQUEST_STATE.equals(action)) {
             if (activeBook != null) broadcast(paused ? "Paused" : "Reading", !paused);
             else {
@@ -194,6 +205,8 @@ public final class AudiobookService extends Service {
         activePositionMs = 0;
         activeDurationMs = 0;
         activeText = "";
+        activePlaybackSpeed = VoiceSettings.playbackSpeed(this);
+        activePlaybackPitch = VoiceSettings.playbackPitch(this);
         activeProfile = profileFromSettings();
         if (target == null) {
             broadcast("Book not found.", false);
@@ -405,6 +418,7 @@ public final class AudiobookService extends Service {
             waitWhilePaused(token);
             if (token != sessionToken) return false;
             player.start();
+            applyPlaybackParams(player);
             broadcast("Reading • " + profileLabel(), true);
 
             long lastSave = 0L;
@@ -417,7 +431,10 @@ public final class AudiobookService extends Service {
                     broadcast("Paused", false);
                     waitWhilePaused(token);
                     if (token != sessionToken) break;
-                    try { if (!player.isPlaying()) player.start(); } catch (IllegalStateException e) {
+                    try {
+                        if (!player.isPlaying()) player.start();
+                        applyPlaybackParams(player);
+                    } catch (IllegalStateException e) {
                         error.compareAndSet(null, "Could not resume audio output.");
                         break;
                     }
@@ -528,12 +545,50 @@ public final class AudiobookService extends Service {
             return;
         }
         int target = clamp(activeSegment + delta, 0, segments.size() - 1);
-        if (target == activeSegment && delta < 0) {
-            saveProgress(book.id, target, 0);
-        } else {
-            saveProgress(book.id, target, 0);
-        }
+        saveProgress(book.id, target, 0);
         startBook(book.id, paused);
+    }
+
+    private void applyNarrationSettings() {
+        float newSpeed = VoiceSettings.playbackSpeed(this);
+        float newPitch = VoiceSettings.playbackPitch(this);
+        String newGeminiStyle = VoiceSettings.effectiveGeminiStyle(this);
+        String oldGeminiStyle = activeProfile == null ? "" : activeProfile.geminiStyle;
+        activePlaybackSpeed = newSpeed;
+        activePlaybackPitch = newPitch;
+
+        BookStore.Book book = activeBook;
+        if (book == null) {
+            broadcast("Narration settings saved", false);
+            stopSelf();
+            return;
+        }
+
+        if (activeProfile != null
+                && VoiceSettings.ENGINE_GEMINI.equals(activeProfile.engine)
+                && !oldGeminiStyle.equals(newGeminiStyle)) {
+            int position = safePosition(currentPlayer);
+            saveProgress(book.id, activeSegment, position);
+            boolean keepPaused = paused;
+            startBook(book.id, keepPaused);
+            return;
+        }
+
+        MediaPlayer player = currentPlayer;
+        if (player != null && !paused) applyPlaybackParams(player);
+        broadcast("Narration • " + VoiceSettings.speedLabel(this)
+                + " • " + VoiceSettings.toneLabel(this)
+                + " • " + VoiceSettings.readingStyleLabel(this), !paused);
+    }
+
+    private void applyPlaybackParams(MediaPlayer player) {
+        if (player == null) return;
+        try {
+            PlaybackParams params = player.getPlaybackParams();
+            params.setSpeed(activePlaybackSpeed);
+            params.setPitch(activePlaybackPitch);
+            player.setPlaybackParams(params);
+        } catch (Throwable ignored) { }
     }
 
     private File existingForProfile(BookStore.Book book, int index, String text) {
@@ -613,7 +668,7 @@ public final class AudiobookService extends Service {
                 VoiceSettings.edgeVoice(this),
                 VoiceSettings.geminiModel(this),
                 VoiceSettings.geminiVoice(this),
-                VoiceSettings.geminiStyle(this),
+                VoiceSettings.effectiveGeminiStyle(this),
                 1.0f);
     }
 
@@ -752,6 +807,9 @@ public final class AudiobookService extends Service {
         state.putExtra(EXTRA_SEGMENT_COUNT, activeSegments == null ? 0 : activeSegments.size());
         state.putExtra(EXTRA_TEXT, activeText == null ? "" : activeText);
         state.putExtra(EXTRA_VOICE_LABEL, profileLabel());
+        state.putExtra(EXTRA_SPEED_LABEL, VoiceSettings.speedLabel(this));
+        state.putExtra(EXTRA_TONE_LABEL, VoiceSettings.toneLabel(this));
+        state.putExtra(EXTRA_STYLE_LABEL, VoiceSettings.readingStyleLabel(this));
         sendBroadcast(state);
     }
 
