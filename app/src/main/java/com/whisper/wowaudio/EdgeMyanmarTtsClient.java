@@ -31,6 +31,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * This is an unofficial consumer endpoint and can change. WoW Audio keeps it isolated behind
  * this class and always retains an offline fallback in ReadingService.
+ *
+ * v1.4.2 regression fix: the experimental SSML break time='220ms' path was intentionally removed
+ * because the previously proven plain escaped-text path starts Nilar / Thiha faster and more reliably.
  */
 final class EdgeMyanmarTtsClient implements AutoCloseable {
     static final String VOICE_NILAR = "my-MM-NilarNeural";
