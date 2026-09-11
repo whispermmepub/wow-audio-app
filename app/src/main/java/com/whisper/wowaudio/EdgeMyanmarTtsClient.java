@@ -285,8 +285,8 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
         if (cp == '&') out.append("&amp;");
         else if (cp == '<') out.append("&lt;");
         else if (cp == '>') out.append("&gt;");
-        else if (cp == '\"') out.append("&quot;");
-        else if (cp == '\'') out.append("&apos;");
+        else if (cp == 34) out.append("&quot;");
+        else if (cp == 39) out.append("&apos;");
         else out.appendCodePoint(cp);
     }
 
