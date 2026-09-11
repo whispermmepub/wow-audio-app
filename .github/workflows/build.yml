@@ -14,6 +14,11 @@ jobs:
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      WOW_AUDIO_KEYSTORE_B64: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 }}
+      WOW_AUDIO_STORE_PASSWORD: ${{ secrets.WOW_AUDIO_STORE_PASSWORD }}
+      WOW_AUDIO_KEY_ALIAS: ${{ secrets.WOW_AUDIO_KEY_ALIAS }}
+      WOW_AUDIO_KEY_PASSWORD: ${{ secrets.WOW_AUDIO_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -122,10 +127,8 @@ jobs:
           ls -lh "$APK"
 
       - name: Decode permanent update keystore
-        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         shell: bash
-        env:
-          WOW_AUDIO_KEYSTORE_B64: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
           printf '%s' "$WOW_AUDIO_KEYSTORE_B64" | base64 --decode > /tmp/WoW-Audio-update-key.jks
@@ -133,12 +136,8 @@ jobs:
           chmod 600 /tmp/WoW-Audio-update-key.jks
 
       - name: Sign update-install APK with permanent key
-        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         shell: bash
-        env:
-          STORE_PASSWORD: ${{ secrets.WOW_AUDIO_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.WOW_AUDIO_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.WOW_AUDIO_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
@@ -146,9 +145,9 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" sign \
             --ks /tmp/WoW-Audio-update-key.jks \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:STORE_PASSWORD \
-            --key-pass env:KEY_PASSWORD \
+            --ks-key-alias "$WOW_AUDIO_KEY_ALIAS" \
+            --ks-pass env:WOW_AUDIO_STORE_PASSWORD \
+            --key-pass env:WOW_AUDIO_KEY_PASSWORD \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
@@ -160,7 +159,7 @@ jobs:
           ls -lh "$SIGNED"
 
       - name: Upload v1.2.0 update-install signed APK
-        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
           name: WoW-Audio-v1.2.0-UPDATE-signed
