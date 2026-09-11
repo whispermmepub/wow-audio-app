@@ -1,4 +1,4 @@
-name: Build WoW Audio v1.2 audiobook player
+name: Build WoW Audio v1.4 audiobook player
 
 on:
   push:
@@ -80,13 +80,13 @@ jobs:
           test "$(stat -c%s /tmp/nilar.mp3)" -gt 3000
           test "$(stat -c%s /tmp/thiha.mp3)" -gt 3000
 
-      - name: Verify v1.2 audiobook contract
+      - name: Verify v1.4 audiobook contract
         shell: bash
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
-          grep -q "versionCode 4" app/build.gradle
-          grep -q "versionName '1.2.0'" app/build.gradle
+          grep -q "versionCode 8" app/build.gradle
+          grep -q "versionName '1.4.0'" app/build.gradle
           grep -q 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
           grep -q 'LibraryActivity' app/src/main/AndroidManifest.xml
           grep -q 'PlayerActivity' app/src/main/AndroidManifest.xml
@@ -117,8 +117,8 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='4'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.2.0'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='8'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.4.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
           unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
@@ -158,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
-          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.2.0-UPDATE-signed.apk
+          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.4.0-UPDATE-signed.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" sign \
             --ks /tmp/WoW-Audio-update-key.jks \
@@ -175,27 +175,27 @@ jobs:
           grep -qi '5f58ab463c3a43275dd768fb3bdb2aaef388b5c18a4d6076b0c5339b4aee0fe1' /tmp/apksigner.txt
           ls -lh "$SIGNED"
 
-      - name: Upload v1.2.0 update-install signed APK
+      - name: Upload v1.4.0 update-install signed APK
         if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.2.0-UPDATE-signed
-          path: app/build/outputs/apk/release/WoW-Audio-v1.2.0-UPDATE-signed.apk
+          name: WoW-Audio-v1.4.0-UPDATE-signed
+          path: app/build/outputs/apk/release/WoW-Audio-v1.4.0-UPDATE-signed.apk
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload v1.2.0 test APK
+      - name: Upload v1.4.0 test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.2.0-audiobook-player-test
+          name: WoW-Audio-v1.4.0-audiobook-player-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
 
-      - name: Upload v1.2.0 unsigned release
+      - name: Upload v1.4.0 unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.2.0-audiobook-player-release-unsigned
+          name: WoW-Audio-v1.4.0-audiobook-player-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
