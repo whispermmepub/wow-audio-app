@@ -27,12 +27,12 @@ public final class ShareImportActivity extends Activity {
     private void forward(Intent source) {
         ArrayList<Uri> uris = collectUris(source);
         if (uris.isEmpty()) {
-            Toast.makeText(this, "No EPUB file was attached.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "No EPUB or text file was attached.", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
-        Intent target = new Intent(this, MainActivity.class);
+        Intent target = new Intent(this, LibraryActivity.class);
         target.setAction(uris.size() > 1 ? Intent.ACTION_SEND_MULTIPLE : Intent.ACTION_VIEW);
         target.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_GRANT_READ_URI_PERMISSION);
         String type = source == null ? null : source.getType();
