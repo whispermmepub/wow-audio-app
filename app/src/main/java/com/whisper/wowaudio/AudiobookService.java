@@ -11,6 +11,7 @@ import android.media.AudioAttributes;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
+import android.media.audiofx.LoudnessEnhancer;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -26,7 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Audiobook service: one logical book timeline, cached speech segments, Edge/Gemini/offline
- * voice engines, exact per-segment resume, book-level scrub, live speed/tone, and background controls.
+ * voice engines, exact per-segment resume, book scrub, live speed/tone/volume, and controls.
  */
 public final class AudiobookService extends Service {
     static final String ACTION_PLAY_BOOK = "com.whisper.wowaudio.v2.PLAY_BOOK";
@@ -54,6 +55,7 @@ public final class AudiobookService extends Service {
     static final String EXTRA_SPEED_LABEL = "speed_label";
     static final String EXTRA_TONE_LABEL = "tone_label";
     static final String EXTRA_STYLE_LABEL = "style_label";
+    static final String EXTRA_VOLUME_LABEL = "volume_label";
 
     private static final String CHANNEL = "audiobook_v2";
     private static final int NOTIFICATION_ID = 1201;
@@ -66,6 +68,7 @@ public final class AudiobookService extends Service {
     private volatile long sessionToken;
     private volatile boolean paused;
     private volatile MediaPlayer currentPlayer;
+    private volatile LoudnessEnhancer currentEnhancer;
     private volatile Thread worker;
     private volatile Future<?> prefetchFuture;
     private volatile BookStore.Book activeBook;
@@ -77,6 +80,7 @@ public final class AudiobookService extends Service {
     private volatile Profile activeProfile;
     private volatile float activePlaybackSpeed = 1.0f;
     private volatile float activePlaybackPitch = 1.0f;
+    private volatile int activeVolumeBoostMb = 300;
     private volatile long edgeRetryAfterMs;
     private volatile long geminiRetryAfterMs;
 
@@ -207,6 +211,7 @@ public final class AudiobookService extends Service {
         activeText = "";
         activePlaybackSpeed = VoiceSettings.playbackSpeed(this);
         activePlaybackPitch = VoiceSettings.playbackPitch(this);
+        activeVolumeBoostMb = VoiceSettings.volumeBoostMb(this);
         activeProfile = profileFromSettings();
         if (target == null) {
             broadcast("Book not found.", false);
@@ -390,6 +395,7 @@ public final class AudiobookService extends Service {
     private boolean playFileBlocking(File file, String bookId, int segmentIndex,
                                      int startPositionMs, long token) throws Exception {
         MediaPlayer player = new MediaPlayer();
+        LoudnessEnhancer enhancer = null;
         currentPlayer = player;
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<String> error = new AtomicReference<>();
@@ -408,6 +414,7 @@ public final class AudiobookService extends Service {
             });
             player.setDataSource(file.getAbsolutePath());
             player.prepare();
+            enhancer = createEnhancer(player);
             int duration = player.getDuration();
             if (duration <= 0) throw new IllegalStateException("Speech audio has zero duration.");
             activeDurationMs = duration;
@@ -419,6 +426,7 @@ public final class AudiobookService extends Service {
             if (token != sessionToken) return false;
             player.start();
             applyPlaybackParams(player);
+            applyVolumeBoost(enhancer);
             broadcast("Reading • " + profileLabel(), true);
 
             long lastSave = 0L;
@@ -434,6 +442,7 @@ public final class AudiobookService extends Service {
                     try {
                         if (!player.isPlaying()) player.start();
                         applyPlaybackParams(player);
+                        applyVolumeBoost(enhancer);
                     } catch (IllegalStateException e) {
                         error.compareAndSet(null, "Could not resume audio output.");
                         break;
@@ -459,6 +468,8 @@ public final class AudiobookService extends Service {
             return token == sessionToken && finished.getCount() == 0;
         } finally {
             if (currentPlayer == player) currentPlayer = null;
+            if (currentEnhancer == enhancer) currentEnhancer = null;
+            releaseEnhancer(enhancer);
             releasePlayer(player);
         }
     }
@@ -552,10 +563,12 @@ public final class AudiobookService extends Service {
     private void applyNarrationSettings() {
         float newSpeed = VoiceSettings.playbackSpeed(this);
         float newPitch = VoiceSettings.playbackPitch(this);
+        int newVolumeBoostMb = VoiceSettings.volumeBoostMb(this);
         String newGeminiStyle = VoiceSettings.effectiveGeminiStyle(this);
         String oldGeminiStyle = activeProfile == null ? "" : activeProfile.geminiStyle;
         activePlaybackSpeed = newSpeed;
         activePlaybackPitch = newPitch;
+        activeVolumeBoostMb = newVolumeBoostMb;
 
         BookStore.Book book = activeBook;
         if (book == null) {
@@ -576,7 +589,9 @@ public final class AudiobookService extends Service {
 
         MediaPlayer player = currentPlayer;
         if (player != null && !paused) applyPlaybackParams(player);
+        applyVolumeBoost(currentEnhancer);
         broadcast("Narration • " + VoiceSettings.speedLabel(this)
+                + " • " + VoiceSettings.volumeLabel(this)
                 + " • " + VoiceSettings.toneLabel(this)
                 + " • " + VoiceSettings.readingStyleLabel(this), !paused);
     }
@@ -589,6 +604,31 @@ public final class AudiobookService extends Service {
             params.setPitch(activePlaybackPitch);
             player.setPlaybackParams(params);
         } catch (Throwable ignored) { }
+    }
+
+    private LoudnessEnhancer createEnhancer(MediaPlayer player) {
+        try {
+            LoudnessEnhancer enhancer = new LoudnessEnhancer(player.getAudioSessionId());
+            currentEnhancer = enhancer;
+            applyVolumeBoost(enhancer);
+            return enhancer;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void applyVolumeBoost(LoudnessEnhancer enhancer) {
+        if (enhancer == null) return;
+        try {
+            enhancer.setTargetGain(Math.max(0, activeVolumeBoostMb));
+            enhancer.setEnabled(activeVolumeBoostMb > 0);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void releaseEnhancer(LoudnessEnhancer enhancer) {
+        if (enhancer == null) return;
+        try { enhancer.setEnabled(false); } catch (Throwable ignored) { }
+        try { enhancer.release(); } catch (Throwable ignored) { }
     }
 
     private File existingForProfile(BookStore.Book book, int index, String text) {
@@ -682,6 +722,9 @@ public final class AudiobookService extends Service {
     }
 
     private void releaseCurrentPlayer() {
+        LoudnessEnhancer enhancer = currentEnhancer;
+        currentEnhancer = null;
+        releaseEnhancer(enhancer);
         MediaPlayer player = currentPlayer;
         currentPlayer = null;
         if (player != null) releasePlayer(player);
@@ -810,6 +853,7 @@ public final class AudiobookService extends Service {
         state.putExtra(EXTRA_SPEED_LABEL, VoiceSettings.speedLabel(this));
         state.putExtra(EXTRA_TONE_LABEL, VoiceSettings.toneLabel(this));
         state.putExtra(EXTRA_STYLE_LABEL, VoiceSettings.readingStyleLabel(this));
+        state.putExtra(EXTRA_VOLUME_LABEL, VoiceSettings.volumeLabel(this));
         sendBroadcast(state);
     }
 
