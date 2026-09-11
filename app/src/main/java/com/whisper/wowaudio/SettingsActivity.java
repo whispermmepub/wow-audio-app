@@ -23,6 +23,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public final class SettingsActivity extends Activity {
     private static final int NAVY = Color.rgb(11, 45, 105);
@@ -42,7 +45,13 @@ public final class SettingsActivity extends Activity {
     private EditText geminiStyle;
     private EditText apiKey;
     private TextView keyStatus;
+    private Button previewButton;
     private MediaPlayer previewPlayer;
+
+    private final ExecutorService previewExecutor = Executors.newSingleThreadExecutor();
+    private volatile Future<?> previewTask;
+    private volatile GeminiTtsClient previewClient;
+    private volatile boolean destroyed;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -51,7 +60,10 @@ public final class SettingsActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        destroyed = true;
+        cancelPreviewWork();
         releasePreview();
+        previewExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -96,7 +108,7 @@ public final class SettingsActivity extends Activity {
         edgeVoiceGroup.addView(nilarVoice, new RadioGroup.LayoutParams(0, -2, 1f));
         edgeVoiceGroup.addView(thihaVoice, new RadioGroup.LayoutParams(0, -2, 1f));
         root.addView(edgeVoiceGroup, marginTop(8));
-        root.addView(body("Nilar / Thiha က API key မလိုပါ။ အသံအသစ်ရယူချိန် Internet လိုပြီး generate ပြီးသားအသံကို စာအုပ်အလိုက် cache သိမ်းထားပါတယ်။"), marginTop(6));
+        root.addView(body("Nilar / Thiha က API key မလိုပါ။ စာအုပ်စာသားကို အသံမထွက်ခင် သန့်စင်ပြီး မြန်မာစာ ဝါကျဖြတ်ပုံနဲ့ pause ကို ပိုသဘာဝကျအောင် ချိန်ထားပါတယ်။ Generate ပြီးသားအသံကို စာအုပ်အလိုက် cache သိမ်းထားပါတယ်။"), marginTop(6));
 
         root.addView(section("Gemini Natural Voice"), marginTop(22));
         keyStatus = body("");
@@ -125,9 +137,9 @@ public final class SettingsActivity extends Activity {
 
         LinearLayout keyActions = new LinearLayout(this);
         keyActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button preview = secondary("Preview Gemini");
-        preview.setOnClickListener(v -> previewGemini());
-        keyActions.addView(preview, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        previewButton = secondary("Preview Gemini");
+        previewButton.setOnClickListener(v -> previewGemini());
+        keyActions.addView(previewButton, new LinearLayout.LayoutParams(0, dp(56), 1f));
         Button clear = secondary("Clear API key");
         clear.setOnClickListener(v -> clearKey());
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(56), 1f);
@@ -136,6 +148,7 @@ public final class SettingsActivity extends Activity {
         root.addView(keyActions, marginTop(10));
 
         root.addView(body("Gemini TTS က optional ဖြစ်ပါတယ်။ API key ကို app က Android Keystore နဲ့ local device ထဲ encrypt လုပ်သိမ်းပြီး GitHub သို့မဟုတ် WoW server ကို မပို့ပါ။ Gemini အသံသုံးချိန် စာသားကို Google Gemini API သို့ ပို့ရပါတယ်။ Quota၊ billing နဲ့ data terms က သင့် Google API account အတိုင်းဖြစ်ပါတယ်။"), marginTop(10));
+        root.addView(body("Voice setting ပြောင်းပြီး Save လုပ်ထားတာကို နောက်တစ်ကြိမ် Play/Resume စတဲ့အချိန်ကစပြီး အသုံးပြုပါမယ်။"), marginTop(6));
 
         Button save = primary("Save Settings");
         save.setOnClickListener(v -> save());
@@ -181,12 +194,11 @@ public final class SettingsActivity extends Activity {
             if (!entered.isEmpty()) SecureApiKeyStore.saveGeminiKey(this, entered);
 
             if (VoiceSettings.ENGINE_GEMINI.equals(engine) && !SecureApiKeyStore.hasGeminiKey(this)) {
-                new AlertDialog.Builder(this)
-                        .setTitle("Gemini API key needed")
-                        .setMessage("Gemini voice ကိုရွေးထားပေမယ့် API key မရှိသေးပါ။ Key မထည့်မချင်း WoW Natural voice ကို fallback သုံးပါမယ်။")
-                        .setPositiveButton("OK", null)
-                        .show();
+                showMessage("Gemini API key needed",
+                        "Gemini voice ကိုရွေးထားပေမယ့် API key မရှိသေးပါ။ Key မထည့်မချင်း WoW Natural voice ကို fallback သုံးပါမယ်။");
             } else {
+                cancelPreviewWork();
+                releasePreview();
                 Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
                 finish();
             }
@@ -196,14 +208,23 @@ public final class SettingsActivity extends Activity {
     }
 
     private void clearKey() {
-        SecureApiKeyStore.clearGeminiKey(this);
-        apiKey.setText("");
-        keyStatus.setText("Gemini API key: not set");
-        apiKey.setHint("Paste API key here");
-        Toast.makeText(this, "Gemini API key cleared", Toast.LENGTH_SHORT).show();
+        try {
+            cancelPreviewWork();
+            releasePreview();
+            SecureApiKeyStore.clearGeminiKey(this);
+            apiKey.setText("");
+            keyStatus.setText("Gemini API key: not set");
+            apiKey.setHint("Paste API key here");
+            Toast.makeText(this, "Gemini API key cleared", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            showError("Could not clear API key", e);
+        }
     }
 
     private void previewGemini() {
+        cancelPreviewWork();
+        releasePreview();
+
         String entered = apiKey.getText().toString().trim();
         final String key;
         try {
@@ -224,23 +245,36 @@ public final class SettingsActivity extends Activity {
         final String voice = String.valueOf(geminiVoice.getSelectedItem());
         final String model = geminiModel.getText().toString().trim();
         final String style = geminiStyle.getText().toString().trim();
+        setPreviewBusy(true);
         Toast.makeText(this, "Generating voice preview…", Toast.LENGTH_SHORT).show();
-        new Thread(() -> {
+
+        previewTask = previewExecutor.submit(() -> {
             GeminiTtsClient client = new GeminiTtsClient();
+            previewClient = client;
             try {
                 File target = new File(getCacheDir(), "gemini-preview.wav");
                 client.synthesizeToFile("မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။ စာအုပ်ကောင်းတစ်အုပ်ကို သဘာဝကျကျ နားထောင်ကြရအောင်။",
                         key, model, voice, style, target);
-                runOnUiThread(() -> playPreview(target));
+                runIfActive(() -> {
+                    setPreviewBusy(false);
+                    playPreview(target);
+                });
             } catch (Exception e) {
-                runOnUiThread(() -> showError("Gemini preview failed", e));
+                if (!Thread.currentThread().isInterrupted()) {
+                    runIfActive(() -> {
+                        setPreviewBusy(false);
+                        showError("Gemini preview failed", e);
+                    });
+                }
             } finally {
+                if (previewClient == client) previewClient = null;
                 client.close();
             }
-        }, "gemini-preview").start();
+        });
     }
 
     private void playPreview(File file) {
+        if (!isUiActive()) return;
         releasePreview();
         try {
             MediaPlayer p = new MediaPlayer();
@@ -259,22 +293,59 @@ public final class SettingsActivity extends Activity {
         }
     }
 
+    private void cancelPreviewWork() {
+        Future<?> task = previewTask;
+        previewTask = null;
+        if (task != null) task.cancel(true);
+        GeminiTtsClient client = previewClient;
+        previewClient = null;
+        if (client != null) {
+            try { client.close(); } catch (Exception ignored) { }
+        }
+        if (!destroyed) setPreviewBusy(false);
+    }
+
     private void releasePreview() {
         MediaPlayer p = previewPlayer;
         previewPlayer = null;
         if (p == null) return;
         try { p.stop(); } catch (Exception ignored) { }
+        try { p.reset(); } catch (Exception ignored) { }
         try { p.release(); } catch (Exception ignored) { }
     }
 
-    private void showError(String title, Throwable error) {
-        String message = error == null || error.getMessage() == null
-                ? "Unknown error" : error.getMessage();
+    private void setPreviewBusy(boolean busy) {
+        Button b = previewButton;
+        if (b == null) return;
+        b.setEnabled(!busy);
+        b.setText(busy ? "Generating…" : "Preview Gemini");
+    }
+
+    private boolean isUiActive() {
+        return !destroyed && !isFinishing() && !isDestroyed();
+    }
+
+    private void runIfActive(Runnable action) {
+        if (destroyed) return;
+        runOnUiThread(() -> {
+            if (isUiActive()) action.run();
+        });
+    }
+
+    private void showMessage(String title, String message) {
+        if (!isUiActive()) return;
         new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(message)
                 .setPositiveButton("OK", null)
                 .show();
+    }
+
+    private void showError(String title, Throwable error) {
+        if (!isUiActive()) return;
+        String message = error == null || error.getMessage() == null
+                ? "Unknown error" : error.getMessage();
+        showMessage(title, message);
     }
 
     private TextView section(String value) {
