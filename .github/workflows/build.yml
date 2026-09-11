@@ -110,8 +110,12 @@ jobs:
           test -s app/libs/sherpa-onnx-1.13.7.aar
           git diff --check
 
-      - name: Test exact Java client, build and lint
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
+      - name: Test speech cleanup, build and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest --tests com.whisper.wowaudio.TtsTextTest --stacktrace
+          gradle :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
 
       - name: Verify APK identity and fallback assets
         shell: bash
