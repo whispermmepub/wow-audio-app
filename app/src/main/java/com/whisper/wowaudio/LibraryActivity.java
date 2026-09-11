@@ -13,9 +13,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -30,7 +32,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Library-first home. Voice controls live in Settings; playback lives in PlayerActivity. */
+/** Library-first home with persistent List / Small List / Grid / Small Grid views. */
 public final class LibraryActivity extends Activity {
     private static final int PICK_BOOK = 41;
     private static final int NAVY_950 = Color.rgb(7, 27, 69);
@@ -39,6 +41,19 @@ public final class LibraryActivity extends Activity {
     private static final int PAGE = Color.rgb(246, 248, 253);
     private static final int INK = Color.rgb(20, 33, 61);
     private static final int MUTED = Color.rgb(91, 105, 132);
+
+    private static final String UI_PREFS = "library_ui_v1";
+    private static final String KEY_VIEW_MODE = "home_view_mode";
+    private static final String VIEW_LIST = "list";
+    private static final String VIEW_SMALL_LIST = "small_list";
+    private static final String VIEW_GRID = "grid";
+    private static final String VIEW_SMALL_GRID = "small_grid";
+    private static final String[] VIEW_VALUES = new String[]{
+            VIEW_LIST, VIEW_SMALL_LIST, VIEW_GRID, VIEW_SMALL_GRID
+    };
+    private static final String[] VIEW_LABELS = new String[]{
+            "List", "Small List", "Grid", "Small Grid"
+    };
 
     private BookStore store;
     private LinearLayout content;
@@ -88,8 +103,17 @@ public final class LibraryActivity extends Activity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView library = heading("Library", 25, INK);
         titleRow.addView(library, new LinearLayout.LayoutParams(0, -2, 1f));
+
         TextView count = text(books.size() + (books.size() == 1 ? " book" : " books"), 13, MUTED, false);
-        titleRow.addView(count);
+        LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(-2, -2);
+        countParams.rightMargin = dp(8);
+        titleRow.addView(count, countParams);
+
+        Button viewMode = secondary(viewModeLabel());
+        viewMode.setTextSize(12);
+        viewMode.setContentDescription("Library view: " + viewModeLabel() + ". Tap to change.");
+        viewMode.setOnClickListener(v -> showViewChooser());
+        titleRow.addView(viewMode, new LinearLayout.LayoutParams(dp(108), dp(48)));
         content.addView(titleRow, marginTop(26));
 
         if (books.isEmpty()) {
@@ -101,7 +125,38 @@ public final class LibraryActivity extends Activity {
             return;
         }
 
-        for (BookStore.Book book : books) content.addView(bookCard(book), marginTop(12));
+        renderBooks(books);
+    }
+
+    private void renderBooks(List<BookStore.Book> books) {
+        String mode = viewMode();
+        if (VIEW_GRID.equals(mode) || VIEW_SMALL_GRID.equals(mode)) {
+            boolean compact = VIEW_SMALL_GRID.equals(mode);
+            int columns = compact ? 3 : 2;
+            GridLayout grid = new GridLayout(this);
+            grid.setColumnCount(columns);
+            grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
+            grid.setUseDefaultMargins(false);
+            for (int i = 0; i < books.size(); i++) {
+                int row = i / columns;
+                int col = i % columns;
+                GridLayout.LayoutParams gp = new GridLayout.LayoutParams(
+                        GridLayout.spec(row), GridLayout.spec(col, 1f));
+                gp.width = 0;
+                gp.height = GridLayout.LayoutParams.WRAP_CONTENT;
+                int gap = dp(compact ? 4 : 6);
+                gp.setMargins(gap, gap, gap, gap);
+                gp.setGravity(Gravity.FILL_HORIZONTAL);
+                grid.addView(bookGridCard(books.get(i), compact), gp);
+            }
+            content.addView(grid, marginTop(8));
+            return;
+        }
+
+        boolean compact = VIEW_SMALL_LIST.equals(mode);
+        for (BookStore.Book book : books) {
+            content.addView(bookListCard(book, compact), marginTop(compact ? 7 : 12));
+        }
     }
 
     private View topBar() {
@@ -121,45 +176,125 @@ public final class LibraryActivity extends Activity {
         return row;
     }
 
-    private View bookCard(BookStore.Book book) {
+    private View bookListCard(BookStore.Book book, boolean compact) {
         LinearLayout outer = card();
+        if (compact) outer.setPadding(dp(10), dp(10), dp(10), dp(10));
+
         LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.TOP);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(coverView(book), new LinearLayout.LayoutParams(dp(86), dp(122)));
+        row.addView(coverView(book), new LinearLayout.LayoutParams(
+                dp(compact ? 58 : 86), dp(compact ? 82 : 122)));
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(0, -2, 1f);
-        ip.leftMargin = dp(14);
+        ip.leftMargin = dp(compact ? 10 : 14);
         row.addView(info, ip);
 
-        TextView name = heading(book.title, 19, INK);
+        TextView name = text(book.title, compact ? 16 : 19, INK, true);
+        name.setMaxLines(compact ? 2 : 3);
+        name.setEllipsize(TextUtils.TruncateAt.END);
         name.setContentDescription("Book: " + book.title);
         info.addView(name);
         if (book.author != null && !book.author.trim().isEmpty()) {
-            info.addView(text(book.author, 14, MUTED, false), marginTop(5));
+            TextView author = text(book.author, compact ? 12 : 14, MUTED, false);
+            author.setMaxLines(1);
+            author.setEllipsize(TextUtils.TruncateAt.END);
+            info.addView(author, marginTop(compact ? 3 : 5));
         }
         String type = "epub".equals(book.type) ? "EPUB" : "TXT";
-        info.addView(text(type + " • " + VoiceSettings.engineLabel(this), 12, Color.rgb(118, 132, 157), false), marginTop(7));
+        info.addView(text(type + " • " + VoiceSettings.engineLabel(this),
+                compact ? 10 : 12, Color.rgb(118, 132, 157), false), marginTop(compact ? 4 : 7));
+        row.addView(listRowActions(book, compact));
         outer.addView(row);
+
+        if (!compact) {
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            boolean resume = hasProgress(book.id);
+            Button play = primary(resume ? "▶  Resume" : "▶  Play");
+            play.setContentDescription((resume ? "Resume " : "Play ") + book.title);
+            play.setOnClickListener(v -> play(book));
+            actions.addView(play, new LinearLayout.LayoutParams(0, dp(58), 1f));
+
+            Button more = secondary("⋮");
+            more.setTextSize(24);
+            more.setContentDescription("More options for " + book.title);
+            more.setOnClickListener(v -> bookMenu(book));
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(62), dp(58));
+            mp.leftMargin = dp(9);
+            actions.addView(more, mp);
+            outer.addView(actions, marginTop(14));
+        }
+        return outer;
+    }
+
+    private View listRowActions(BookStore.Book book, boolean compact) {
+        if (!compact) {
+            View spacer = new View(this);
+            spacer.setVisibility(View.GONE);
+            return spacer;
+        }
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button play = secondary("▶");
+        play.setTextSize(18);
+        play.setContentDescription((hasProgress(book.id) ? "Resume " : "Play ") + book.title);
+        play.setOnClickListener(v -> play(book));
+        actions.addView(play, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        Button more = secondary("⋮");
+        more.setTextSize(22);
+        more.setContentDescription("More options for " + book.title);
+        more.setOnClickListener(v -> bookMenu(book));
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        mp.leftMargin = dp(5);
+        actions.addView(more, mp);
+        return actions;
+    }
+
+    private View bookGridCard(BookStore.Book book, boolean compact) {
+        LinearLayout outer = card();
+        outer.setPadding(dp(compact ? 7 : 10), dp(compact ? 7 : 10), dp(compact ? 7 : 10), dp(compact ? 8 : 10));
+        outer.addView(coverView(book), new LinearLayout.LayoutParams(-1, dp(compact ? 126 : 205)));
+
+        TextView name = text(book.title, compact ? 12 : 15, INK, true);
+        name.setMaxLines(2);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setContentDescription("Book: " + book.title);
+        outer.addView(name, marginTop(compact ? 6 : 9));
+
+        if (!compact && book.author != null && !book.author.trim().isEmpty()) {
+            TextView author = text(book.author, 11, MUTED, false);
+            author.setMaxLines(1);
+            author.setEllipsize(TextUtils.TruncateAt.END);
+            outer.addView(author, marginTop(3));
+        }
+
+        String type = "epub".equals(book.type) ? "EPUB" : "TXT";
+        TextView meta = text(type + " • " + VoiceSettings.engineLabel(this), compact ? 9 : 10,
+                Color.rgb(118, 132, 157), false);
+        meta.setMaxLines(1);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        outer.addView(meta, marginTop(4));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
-        boolean resume = hasProgress(book.id);
-        Button play = primary(resume ? "▶  Resume" : "▶  Play");
-        play.setContentDescription((resume ? "Resume " : "Play ") + book.title);
+        Button play = primary(compact ? "▶" : (hasProgress(book.id) ? "▶ Resume" : "▶ Play"));
+        play.setTextSize(compact ? 15 : 12);
+        play.setContentDescription((hasProgress(book.id) ? "Resume " : "Play ") + book.title);
         play.setOnClickListener(v -> play(book));
-        actions.addView(play, new LinearLayout.LayoutParams(0, dp(58), 1f));
+        actions.addView(play, new LinearLayout.LayoutParams(0, dp(compact ? 44 : 48), 1f));
 
         Button more = secondary("⋮");
-        more.setTextSize(24);
+        more.setTextSize(compact ? 18 : 20);
         more.setContentDescription("More options for " + book.title);
         more.setOnClickListener(v -> bookMenu(book));
-        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(62), dp(58));
-        mp.leftMargin = dp(9);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(compact ? 42 : 46), dp(compact ? 44 : 48));
+        mp.leftMargin = dp(5);
         actions.addView(more, mp);
-        outer.addView(actions, marginTop(14));
+        outer.addView(actions, marginTop(compact ? 6 : 8));
         return outer;
     }
 
@@ -186,6 +321,39 @@ public final class LibraryActivity extends Activity {
         bg.setCornerRadius(dp(12));
         fallback.setBackground(bg);
         return fallback;
+    }
+
+    private void showViewChooser() {
+        int checked = viewModeIndex(viewMode());
+        new AlertDialog.Builder(this)
+                .setTitle("Library View")
+                .setSingleChoiceItems(VIEW_LABELS, checked, (dialog, which) -> {
+                    if (which >= 0 && which < VIEW_VALUES.length) {
+                        getSharedPreferences(UI_PREFS, MODE_PRIVATE).edit()
+                                .putString(KEY_VIEW_MODE, VIEW_VALUES[which]).apply();
+                        dialog.dismiss();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String viewMode() {
+        String value = getSharedPreferences(UI_PREFS, MODE_PRIVATE)
+                .getString(KEY_VIEW_MODE, VIEW_LIST);
+        for (String allowed : VIEW_VALUES) if (allowed.equals(value)) return value;
+        return VIEW_LIST;
+    }
+
+    private String viewModeLabel() {
+        int index = viewModeIndex(viewMode());
+        return VIEW_LABELS[index];
+    }
+
+    private static int viewModeIndex(String value) {
+        for (int i = 0; i < VIEW_VALUES.length; i++) if (VIEW_VALUES[i].equals(value)) return i;
+        return 0;
     }
 
     private void bookMenu(BookStore.Book book) {

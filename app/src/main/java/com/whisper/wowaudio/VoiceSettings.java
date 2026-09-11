@@ -19,6 +19,7 @@ final class VoiceSettings {
     static final String TONE_BRIGHT = "bright";
 
     static final String STYLE_AUTO = "auto";
+    static final String STYLE_GEMINI_EXPRESSIVE = "gemini_expressive";
     static final String STYLE_NORMAL = "normal";
     static final String STYLE_NARRATOR = "narrator";
     static final String STYLE_STORYTELLER = "storyteller";
@@ -30,8 +31,8 @@ final class VoiceSettings {
     static final int[] VOLUME_BOOSTS_MB = new int[]{0, 300, 600, 900, 1200};
     static final String[] TONES = new String[]{TONE_NORMAL, TONE_SOFT, TONE_DEEP, TONE_BRIGHT};
     static final String[] READING_STYLES = new String[]{
-            STYLE_AUTO, STYLE_NORMAL, STYLE_NARRATOR, STYLE_STORYTELLER,
-            STYLE_CALM, STYLE_DRAMATIC, STYLE_EMOTIONAL
+            STYLE_AUTO, STYLE_GEMINI_EXPRESSIVE, STYLE_NORMAL, STYLE_NARRATOR,
+            STYLE_STORYTELLER, STYLE_CALM, STYLE_DRAMATIC, STYLE_EMOTIONAL
     };
 
     static final String[] GEMINI_VOICES = new String[]{
@@ -201,7 +202,9 @@ final class VoiceSettings {
     static String effectiveGeminiStyle(Context context) {
         String preset = readingStyle(context);
         String direction;
-        if (STYLE_NORMAL.equals(preset)) {
+        if (STYLE_GEMINI_EXPRESSIVE.equals(preset)) {
+            direction = "Use highly natural but controlled audiobook expression. Shape Burmese sentence melody, emphasis, pauses, dialogue contrast, questions, tension, tenderness and emotional transitions with clear rise-and-fall, while keeping the same narrator identity and never overacting.";
+        } else if (STYLE_NORMAL.equals(preset)) {
             direction = "Use a natural neutral speaking voice with clear Burmese pronunciation and steady pacing.";
         } else if (STYLE_NARRATOR.equals(preset)) {
             direction = "Perform as a professional audiobook narrator: polished, clear, warm, and expressive without overacting.";
@@ -247,6 +250,7 @@ final class VoiceSettings {
 
     static String readingStyleLabel(Context context) {
         String value = readingStyle(context);
+        if (STYLE_GEMINI_EXPRESSIVE.equals(value)) return "Gemini-like";
         if (STYLE_NORMAL.equals(value)) return "Normal";
         if (STYLE_NARRATOR.equals(value)) return "Narrator";
         if (STYLE_STORYTELLER.equals(value)) return "Storyteller";
@@ -260,7 +264,9 @@ final class VoiceSettings {
         String engine = engine(context);
         if (ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice(context);
         if (ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
-        return EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice(context)) ? "Thiha" : "Nilar";
+        String edge = EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice(context)) ? "Thiha" : "Nilar";
+        if (STYLE_GEMINI_EXPRESSIVE.equals(readingStyle(context))) return edge + " • Gemini-like";
+        return edge;
     }
 
     private static boolean near(float a, float b) {

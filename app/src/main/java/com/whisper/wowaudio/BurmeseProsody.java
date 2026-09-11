@@ -9,7 +9,7 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v2-contextual";
+    static final String RENDER_VERSION = "burmese-prosody-v3-gemini-like";
 
     static final class Profile {
         final float speedMultiplier;
@@ -38,6 +38,7 @@ final class BurmeseProsody {
         String s = text == null ? "" : text.trim();
         if (s.isEmpty()) return neutral();
 
+        boolean geminiLike = VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(readingStyle);
         float intensity = styleIntensity(readingStyle);
         float baseSpeed = 1.0f;
         float basePitch = 1.0f;
@@ -45,6 +46,9 @@ final class BurmeseProsody {
 
         if (VoiceSettings.STYLE_NORMAL.equals(readingStyle)) {
             intensity = 0.0f;
+        } else if (VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(readingStyle)) {
+            baseSpeed = 0.994f;
+            basePause += 10;
         } else if (VoiceSettings.STYLE_CALM.equals(readingStyle)) {
             baseSpeed = 0.982f;
             basePitch = 0.996f;
@@ -65,19 +69,26 @@ final class BurmeseProsody {
         boolean dialogue = looksLikeDialogue(s);
         boolean ellipsis = hasEllipsis(s);
         boolean paragraph = s.contains("\n\n");
+        boolean quotedQuestion = dialogue && question;
 
         int sadScore = score(s,
-                "ဝမ်းနည်း", "မျက်ရည်", "ငို", "ဆုံးရှုံး", "နာကျင်", "ကြေကွဲ", "လွမ်း", "သေဆုံး", "စိတ်မကောင်း", "နာဝမ်း");
+                "ဝမ်းနည်း", "မျက်ရည်", "ငို", "ဆုံးရှုံး", "နာကျင်", "ကြေကွဲ", "လွမ်း", "သေဆုံး",
+                "စိတ်မကောင်း", "နာဝမ်း", "အထီးကျန်", "ဝမ်းနည်းစွာ", "စိတ်ပျက်", "မေ့မရ");
         int tenseScore = score(s,
-                "ကြောက်", "ထိတ်လန့်", "အန္တရာယ်", "ပြေး", "အော်ဟစ်", "တိုက်ခိုက်", "အရေးပေါ်", "တုန်", "ခြိမ်းခြောက်", "ရုတ်တရက်");
+                "ကြောက်", "ထိတ်လန့်", "အန္တရာယ်", "ပြေး", "အော်ဟစ်", "တိုက်ခိုက်", "အရေးပေါ်", "တုန်",
+                "ခြိမ်းခြောက်", "ရုတ်တရက်", "တင်းကျပ်", "အသက်ရှု", "လိုက်", "လွတ်မြောက်");
         int calmScore = score(s,
-                "တိတ်ဆိတ်", "ငြိမ်သက်", "အေးချမ်း", "ညင်သာ", "ဖြည်းဖြည်း", "နူးညံ့", "တည်ငြိမ်", "သက်သာ");
+                "တိတ်ဆိတ်", "ငြိမ်သက်", "အေးချမ်း", "ညင်သာ", "ဖြည်းဖြည်း", "နူးညံ့", "တည်ငြိမ်", "သက်သာ",
+                "အေးဆေး", "အေးအေးဆေးဆေး", "တိုးတိုး", "တိတ်တိတ်");
         int joyfulScore = score(s,
-                "ပျော်", "ဝမ်းသာ", "ရယ်", "ကြည်နူး", "ပီတိ", "အောင်မြင်", "ချစ်စရာ", "ပြုံး");
+                "ပျော်", "ဝမ်းသာ", "ရယ်", "ကြည်နူး", "ပီတိ", "အောင်မြင်", "ချစ်စရာ", "ပြုံး", "ရွှင်လန်း",
+                "အားရ", "စိတ်ချမ်းသာ");
         int angryScore = score(s,
-                "ဒေါသ", "စိတ်ဆိုး", "အော်", "မုန်း", "တင်းမာ", "ကျိန်", "စွပ်စွဲ");
+                "ဒေါသ", "စိတ်ဆိုး", "အော်", "မုန်း", "တင်းမာ", "ကျိန်", "စွပ်စွဲ", "မာန်", "မကျေနပ်",
+                "စိတ်တို");
         int tenderScore = score(s,
-                "ချစ်", "ကြင်နာ", "နွေးထွေး", "ပွေ့ဖက်", "သတိရ", "လွမ်းဆွတ်", "နူးနူးညံ့ညံ့");
+                "ချစ်", "ကြင်နာ", "နွေးထွေး", "ပွေ့ဖက်", "သတိရ", "လွမ်းဆွတ်", "နူးနူးညံ့ညံ့", "ဂရုစိုက်",
+                "မေတ္တာ", "နှစ်သိမ့်");
 
         float speedDelta = 0.0f;
         float pitchDelta = 0.0f;
@@ -124,8 +135,8 @@ final class BurmeseProsody {
 
         if (question) {
             speedDelta -= 0.006f;
-            pitchDelta += 0.016f;
-            pause += 28;
+            pitchDelta += quotedQuestion ? 0.021f : 0.016f;
+            pause += quotedQuestion ? 36 : 28;
             if ("Natural".equals(label)) label = "Question";
         }
         if (exclamation) {
@@ -148,15 +159,42 @@ final class BurmeseProsody {
 
         // Multiple matching mood words make the cue a little stronger, but never theatrical.
         float cueBoost = 1.0f + Math.min(0.22f, Math.max(0, strongest - 1) * 0.07f);
+        if (geminiLike) {
+            // Gemini-like mode keeps the original Nilar / Thiha timbre and fast synthesis path,
+            // but gives sentence melody, emphasis and pauses a wider audiobook-style contour.
+            cueBoost += 0.18f;
+            speedDelta *= 1.16f;
+            pitchDelta *= 1.20f;
+            gain = Math.round(gain * 1.20f);
+            if (dialogue) {
+                pitchDelta += question ? 0.010f : 0.006f;
+                gain += 28;
+            }
+            if (ellipsis) pause += 28;
+            if (paragraph) pause += 32;
+            if (strongest == 0 && !question && !exclamation && !ellipsis && !dialogue) {
+                speedDelta -= 0.006f;
+                pause += 8;
+                label = "Narrator";
+            }
+        }
+
         float speed = baseSpeed + speedDelta * intensity * cueBoost;
         float pitch = basePitch + pitchDelta * intensity * cueBoost;
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        speed = clamp(speed, 0.935f, 1.055f);
-        pitch = clamp(pitch, 0.965f, 1.045f);
-        expressiveGain = clamp(expressiveGain, 0, 180);
-        expressivePause = clamp(expressivePause, 55, 270);
+        if (geminiLike) {
+            speed = clamp(speed, 0.910f, 1.080f);
+            pitch = clamp(pitch, 0.940f, 1.070f);
+            expressiveGain = clamp(expressiveGain, 0, 240);
+            expressivePause = clamp(expressivePause, 50, 330);
+        } else {
+            speed = clamp(speed, 0.935f, 1.055f);
+            pitch = clamp(pitch, 0.965f, 1.045f);
+            expressiveGain = clamp(expressiveGain, 0, 180);
+            expressivePause = clamp(expressivePause, 55, 270);
+        }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
 
@@ -204,9 +242,9 @@ final class BurmeseProsody {
     private static boolean isQuestion(String s) {
         String value = stripClosingQuotes(s.trim());
         if (value.endsWith("?")) return true;
-        int start = Math.max(0, value.length() - 64);
+        int start = Math.max(0, value.length() - 72);
         String tail = value.substring(start);
-        return containsAny(tail, "လား", "သလား", "မလဲ", "ဘယ်လို", "ဘာကြောင့်", "ဘယ်သူ", "ဘယ်မှာ", "ဘယ်တော့", "ဘယ်နှ");
+        return containsAny(tail, "လား", "သလား", "မလဲ", "မလား", "ဘယ်လို", "ဘာကြောင့်", "ဘာလို့", "ဘယ်သူ", "ဘယ်မှာ", "ဘယ်တော့", "ဘယ်နှ", "ဟုတ်လား");
     }
 
     private static boolean hasEllipsis(String s) {
@@ -265,6 +303,7 @@ final class BurmeseProsody {
     }
 
     private static float styleIntensity(String style) {
+        if (VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(style)) return 1.0f;
         if (VoiceSettings.STYLE_NARRATOR.equals(style)) return 0.30f;
         if (VoiceSettings.STYLE_STORYTELLER.equals(style)) return 0.55f;
         if (VoiceSettings.STYLE_CALM.equals(style)) return 0.36f;
