@@ -15,19 +15,20 @@ final class TtsText {
      */
     static List<String> chunks(String text) {
         List<String> out = new ArrayList<>();
-        if (text == null) return out;
+        String normalized = normalizeForSpeech(text);
+        if (normalized.isEmpty()) return out;
         int start = 0;
-        int length = text.length();
+        int length = normalized.length();
         boolean first = true;
         while (start < length) {
-            while (start < length && Character.isWhitespace(text.charAt(start))) start++;
+            while (start < length && Character.isWhitespace(normalized.charAt(start))) start++;
             if (start >= length) break;
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(text, start, limit, first ? 60 : 180);
+            int end = findBreak(normalized, start, limit, first ? 60 : 180);
             if (end <= start) end = limit;
-            String chunk = clean(text.substring(start, end));
+            String chunk = clean(normalized.substring(start, end));
             if (!chunk.isEmpty() && containsMyanmar(chunk)) {
                 out.add(chunk);
                 first = false;
@@ -35,6 +36,34 @@ final class TtsText {
             start = end;
         }
         return out;
+    }
+
+    /**
+     * Normalizes text once before every voice engine sees it. Some EPUB generators accidentally
+     * store escaped line endings (\\n / \\r / \\t) or stray runs such as "n n n n" in text
+     * nodes. Those artifacts should never be narrated, but ordinary English words are preserved.
+     */
+    static String normalizeForSpeech(String value) {
+        if (value == null) return "";
+        String s = value
+                .replace('\u00a0', ' ')
+                .replace("\u200B", "")
+                .replace("\u200C", "")
+                .replace("\u200D", "")
+                .replace("\uFEFF", "")
+                .replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
+                .replace("\\r", "\n")
+                .replace("\\t", " ")
+                .replace("\r\n", "\n")
+                .replace('\r', '\n');
+
+        // Remove malformed EPUB filler that consists only of isolated Latin n tokens.
+        s = s.replaceAll("(?im)^[ \\t]*(?:[nN][ \\t]+){1,}[nN][ \\t]*$", "")
+                .replaceAll("(?im)^[ \\t]*[nN][ \\t]*$", "")
+                .replaceAll("(?i)(?<![A-Za-z])n(?:[ \\t]+n){1,}(?![A-Za-z])", " ");
+
+        return clean(s);
     }
 
     private static int findBreak(String text, int start, int limit, int minChars) {
@@ -66,12 +95,9 @@ final class TtsText {
     }
 
     private static String clean(String value) {
-        return value.replace('\u00a0', ' ')
-                .replace("\u200B", "")
-                .replace("\r\n", "\n")
-                .replace('\r', '\n')
-                .replaceAll("[ \\t]+", " ")
+        return value.replaceAll("[ \\t]+", " ")
                 .replaceAll("\\n[ \\t]+", "\\n")
+                .replaceAll("[ \\t]+\\n", "\\n")
                 .replaceAll("\\n{3,}", "\\n\\n")
                 .trim();
     }
