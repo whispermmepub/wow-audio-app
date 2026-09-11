@@ -9,7 +9,6 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -33,7 +32,7 @@ final class GeminiTtsClient implements AutoCloseable {
 
     File synthesizeToFile(String text, String apiKey, String model, String voice,
                           String style, File target) throws Exception {
-        String cleanText = text == null ? "" : text.trim();
+        String cleanText = TtsText.normalizeForSpeech(text);
         String cleanKey = apiKey == null ? "" : apiKey.trim();
         if (cleanText.isEmpty()) throw new IllegalArgumentException("No readable text for Gemini voice.");
         if (cleanKey.isEmpty()) throw new IllegalStateException("Gemini API key is not set.");
@@ -61,48 +60,85 @@ final class GeminiTtsClient implements AutoCloseable {
 
         String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + safeModel + ":generateContent";
-        Request request = new Request.Builder()
-                .url(url)
-                .header("x-goog-api-key", cleanKey)
-                .header("Accept", "application/json")
-                .post(RequestBody.create(body.toString(), JSON))
-                .build();
+        RequestBody requestBody = RequestBody.create(body.toString(), JSON);
 
-        try (Response response = client.newCall(request).execute()) {
-            String responseBody = response.body() == null ? "" : response.body().string();
-            if (!response.isSuccessful()) {
-                throw new IOException("Gemini TTS HTTP " + response.code() + ": " + errorMessage(responseBody));
+        IOException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("x-goog-api-key", cleanKey)
+                    .header("Accept", "application/json")
+                    .post(requestBody)
+                    .build();
+            try (Response response = client.newCall(request).execute()) {
+                String responseBody = response.body() == null ? "" : response.body().string();
+                if (!response.isSuccessful()) {
+                    IOException problem = new IOException("Gemini TTS HTTP " + response.code()
+                            + ": " + errorMessage(responseBody));
+                    last = problem;
+                    if (attempt < 2 && retryable(response.code())) {
+                        sleepBeforeRetry(attempt);
+                        continue;
+                    }
+                    throw problem;
+                }
+                parseAudioResponse(responseBody, target);
+                return target;
+            } catch (IOException e) {
+                last = e;
+                if (attempt < 2 && !Thread.currentThread().isInterrupted()) {
+                    sleepBeforeRetry(attempt);
+                    continue;
+                }
+                throw e;
             }
-            JSONObject root = new JSONObject(responseBody);
-            JSONArray candidates = root.optJSONArray("candidates");
-            if (candidates == null || candidates.length() == 0) {
-                throw new IOException("Gemini TTS returned no audio candidate.");
-            }
-            JSONObject first = candidates.getJSONObject(0)
-                    .getJSONObject("content")
-                    .getJSONArray("parts")
-                    .getJSONObject(0);
-            JSONObject inline = first.optJSONObject("inlineData");
-            if (inline == null) inline = first.optJSONObject("inline_data");
-            if (inline == null) throw new IOException("Gemini TTS response did not contain audio data.");
+        }
+        throw last == null ? new IOException("Gemini TTS request failed.") : last;
+    }
 
-            String data = inline.optString("data", "");
-            if (data.isEmpty()) throw new IOException("Gemini TTS returned empty audio.");
-            String mime = inline.optString("mimeType", inline.optString("mime_type", "audio/L16;rate=24000"));
-            int sampleRate = parseSampleRate(mime);
-            byte[] pcm = Base64.decode(data, Base64.DEFAULT);
-            if (pcm.length < 1000) throw new IOException("Gemini TTS returned unusable audio.");
-            writePcm16WavAtomic(target, pcm, sampleRate);
-            return target;
+    private static void parseAudioResponse(String responseBody, File target) throws Exception {
+        JSONObject root = new JSONObject(responseBody);
+        JSONArray candidates = root.optJSONArray("candidates");
+        if (candidates == null || candidates.length() == 0) {
+            throw new IOException("Gemini TTS returned no audio candidate.");
+        }
+        JSONObject first = candidates.getJSONObject(0)
+                .getJSONObject("content")
+                .getJSONArray("parts")
+                .getJSONObject(0);
+        JSONObject inline = first.optJSONObject("inlineData");
+        if (inline == null) inline = first.optJSONObject("inline_data");
+        if (inline == null) throw new IOException("Gemini TTS response did not contain audio data.");
+
+        String data = inline.optString("data", "");
+        if (data.isEmpty()) throw new IOException("Gemini TTS returned empty audio.");
+        String mime = inline.optString("mimeType", inline.optString("mime_type", "audio/L16;rate=24000"));
+        int sampleRate = parseSampleRate(mime);
+        byte[] pcm = Base64.decode(data, Base64.DEFAULT);
+        if (pcm.length < 1000) throw new IOException("Gemini TTS returned unusable audio.");
+        writePcm16WavAtomic(target, pcm, sampleRate);
+    }
+
+    private static boolean retryable(int code) {
+        return code == 429 || code == 500 || code == 502 || code == 503 || code == 504;
+    }
+
+    private static void sleepBeforeRetry(int attempt) throws IOException {
+        try {
+            Thread.sleep(700L * (attempt + 1));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Gemini TTS preview cancelled.", e);
         }
     }
 
     private static String buildPrompt(String text, String style) {
         String direction = style == null || style.trim().isEmpty()
                 ? VoiceSettings.DEFAULT_STYLE : style.trim();
-        return "Read the following Burmese audiobook passage aloud. "
-                + "Do not add, remove, summarize, translate, or explain any words. "
-                + "Performance direction: " + direction + "\n\nPASSAGE:\n" + text;
+        return "Synthesize speech only. Never speak the instructions or labels below. "
+                + "Read the Burmese audiobook transcript exactly as written without adding, removing, "
+                + "summarizing, translating, or explaining words. Performance direction: "
+                + direction + "\n\nBEGIN TRANSCRIPT\n" + text + "\nEND TRANSCRIPT";
     }
 
     private static String safeModel(String model) {
