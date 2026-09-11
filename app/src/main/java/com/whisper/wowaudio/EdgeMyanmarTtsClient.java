@@ -124,7 +124,7 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
                     String rate = (percent >= 0 ? "+" : "") + percent + "%";
                     String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>"
                             + "<voice name='" + voice + "'><prosody pitch='+0Hz' rate='" + rate
-                            + "' volume='+0%'>" + ssmlBody(text) + "</prosody></voice></speak>";
+                            + "' volume='+0%'>" + escapeXml(text) + "</prosody></voice></speak>";
                     String speech = "X-RequestId:" + randomId() + "\r\n"
                             + "Content-Type:application/ssml+xml\r\n"
                             + "X-Timestamp:" + stamp + "Z\r\n"
@@ -243,11 +243,10 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
     }
 
     private static String cleanInput(String value) {
-        String normalized = TtsText.normalizeForSpeech(value);
-        if (normalized.isEmpty()) return "";
-        StringBuilder out = new StringBuilder(normalized.length());
-        for (int i = 0; i < normalized.length();) {
-            int cp = normalized.codePointAt(i);
+        if (value == null) return "";
+        StringBuilder out = new StringBuilder(value.length());
+        for (int i = 0; i < value.length();) {
+            int cp = value.codePointAt(i);
             i += Character.charCount(cp);
             if ((cp >= 0 && cp <= 8) || (cp >= 11 && cp <= 12) || (cp >= 14 && cp <= 31)) out.append(' ');
             else out.appendCodePoint(cp);
@@ -255,39 +254,12 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
         return out.toString().trim();
     }
 
-    /** Add subtle punctuation pauses while preserving every spoken word exactly. */
-    private static String ssmlBody(String value) {
-        StringBuilder out = new StringBuilder(value.length() + 96);
-        boolean previousBreak = false;
-        for (int i = 0; i < value.length();) {
-            int cp = value.codePointAt(i);
-            i += Character.charCount(cp);
-            if (cp == '\n') {
-                if (!previousBreak) out.append("<break time='150ms'/>");
-                previousBreak = true;
-                continue;
-            }
-            appendEscaped(out, cp);
-            if (cp == '။' || cp == '!' || cp == '?') {
-                out.append("<break time='220ms'/>");
-                previousBreak = true;
-            } else if (cp == '၊' || cp == ',' || cp == ';' || cp == ':') {
-                out.append("<break time='95ms'/>");
-                previousBreak = true;
-            } else if (!Character.isWhitespace(cp)) {
-                previousBreak = false;
-            }
-        }
-        return out.toString();
-    }
-
-    private static void appendEscaped(StringBuilder out, int cp) {
-        if (cp == '&') out.append("&amp;");
-        else if (cp == '<') out.append("&lt;");
-        else if (cp == '>') out.append("&gt;");
-        else if (cp == 34) out.append("&quot;");
-        else if (cp == 39) out.append("&apos;");
-        else out.appendCodePoint(cp);
+    private static String escapeXml(String value) {
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 
     private static String timestamp() {
