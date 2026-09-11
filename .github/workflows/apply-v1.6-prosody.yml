@@ -1,0 +1,126 @@
+name: Apply v1.6 Burmese prosody integration
+
+on:
+  push:
+    branches: ['feature/v1.6.0-burmese-prosody']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[prosody-integrated]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.6.0-burmese-prosody
+          fetch-depth: 0
+      - name: Integrate playback prosody without changing Edge synthesis protocol
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if old not in s:
+                  raise SystemExit(f'expected text not found in {path}: {old[:80]!r}')
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding='utf-8')
+
+          service = 'app/src/main/java/com/whisper/wowaudio/AudiobookService.java'
+          replace_once(service,
+              '    private volatile int activeVolumeBoostMb = 300;\n',
+              '    private volatile int activeVolumeBoostMb = 300;\n'
+              '    private volatile BurmeseProsody.Profile activeProsody = BurmeseProsody.neutral();\n')
+          replace_once(service,
+              '                activeText = segments.get(index);\n                activeDurationMs = 0;\n',
+              '                activeText = segments.get(index);\n'
+              '                activeProsody = BurmeseProsody.analyze(activeText, VoiceSettings.readingStyle(this));\n'
+              '                activeDurationMs = 0;\n')
+          replace_once(service,
+              '                boolean completed = playFileBlocking(audio, target.id, index, startMs, token);\n'
+              '                if (token != sessionToken || !completed) return;\n\n'
+              '                index++;\n',
+              '                boolean completed = playFileBlocking(audio, target.id, index, startMs, token);\n'
+              '                if (token != sessionToken || !completed) return;\n'
+              '                waitBetweenSegments(profile, token);\n\n'
+              '                index++;\n')
+          replace_once(service,
+              '        activeVolumeBoostMb = newVolumeBoostMb;\n\n        BookStore.Book book = activeBook;\n',
+              '        activeVolumeBoostMb = newVolumeBoostMb;\n'
+              '        activeProsody = BurmeseProsody.analyze(activeText, VoiceSettings.readingStyle(this));\n\n'
+              '        BookStore.Book book = activeBook;\n')
+          replace_once(service,
+              '            PlaybackParams params = player.getPlaybackParams();\n'
+              '            params.setSpeed(activePlaybackSpeed);\n'
+              '            params.setPitch(activePlaybackPitch);\n'
+              '            player.setPlaybackParams(params);\n',
+              '            PlaybackParams params = player.getPlaybackParams();\n'
+              '            BurmeseProsody.Profile prosody = effectiveProsody();\n'
+              '            params.setSpeed(clampFloat(activePlaybackSpeed * prosody.speedMultiplier, 0.60f, 2.0f));\n'
+              '            params.setPitch(clampFloat(activePlaybackPitch * prosody.pitchMultiplier, 0.85f, 1.20f));\n'
+              '            player.setPlaybackParams(params);\n')
+          replace_once(service,
+              '            enhancer.setTargetGain(Math.max(0, activeVolumeBoostMb));\n'
+              '            enhancer.setEnabled(activeVolumeBoostMb > 0);\n',
+              '            int target = Math.max(0, Math.min(1200, activeVolumeBoostMb + effectiveProsody().gainMb));\n'
+              '            enhancer.setTargetGain(target);\n'
+              '            enhancer.setEnabled(target > 0);\n')
+          replace_once(service,
+              '    private static void releaseEnhancer(LoudnessEnhancer enhancer) {\n',
+              '    private BurmeseProsody.Profile effectiveProsody() {\n'
+              '        Profile profile = activeProfile;\n'
+              '        if (profile != null && VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) return BurmeseProsody.neutral();\n'
+              '        BurmeseProsody.Profile p = activeProsody;\n'
+              '        return p == null ? BurmeseProsody.neutral() : p;\n'
+              '    }\n\n'
+              '    private void waitBetweenSegments(Profile profile, long token) {\n'
+              '        if (profile != null && VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) return;\n'
+              '        int waitMs = effectiveProsody().pauseAfterMs;\n'
+              '        long end = System.currentTimeMillis() + waitMs;\n'
+              '        while (token == sessionToken && System.currentTimeMillis() < end) {\n'
+              '            if (Thread.currentThread().isInterrupted()) return;\n'
+              '            try { Thread.sleep(Math.min(30L, Math.max(1L, end - System.currentTimeMillis()))); }\n'
+              '            catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }\n'
+              '        }\n'
+              '    }\n\n'
+              '    private static float clampFloat(float value, float min, float max) {\n'
+              '        return Math.max(min, Math.min(max, value));\n'
+              '    }\n\n'
+              '    private static void releaseEnhancer(LoudnessEnhancer enhancer) {\n')
+
+          tts = 'app/src/main/java/com/whisper/wowaudio/TtsText.java'
+          replace_once(tts, '    private static final int NEXT_MAX_CHARS = 620;\n',
+                            '    private static final int NEXT_MAX_CHARS = 480;\n')
+          replace_once(tts,
+              "        for (int i = limit - 1; i >= floor; i--) {\n            char c = text.charAt(i);\n            if (c == '။' || c == '!' || c == '?' || c == '\\n') return i + 1;\n        }\n",
+              "        // Prefer the first complete sentence after the minimum length. This keeps mood chunks\n"
+              "        // focused without making the fast first-speech path too chatty.\n"
+              "        for (int i = floor; i < limit; i++) {\n            char c = text.charAt(i);\n            if (c == '။' || c == '!' || c == '?' || c == '…' || c == '.' || c == '\\n') return i + 1;\n        }\n")
+
+          gemini = 'app/src/main/java/com/whisper/wowaudio/GeminiTtsClient.java'
+          replace_once(gemini,
+              '                + direction + "\\n\\nBEGIN TRANSCRIPT\\n" + text + "\\nEND TRANSCRIPT";\n',
+              '                + direction + " " + BurmeseProsody.geminiDirection()\n'
+              '                + "\\n\\nBEGIN TRANSCRIPT\\n" + text + "\\nEND TRANSCRIPT";\n')
+
+          cache = 'app/src/main/java/com/whisper/wowaudio/AudioCache.java'
+          replace_once(cache,
+              '        String signature = sha256(model + "\\n" + voice + "\\n" + style + "\\n" + text);\n',
+              '        String signature = sha256(BurmeseProsody.RENDER_VERSION + "\\n" + model + "\\n" + voice + "\\n" + style + "\\n" + text);\n')
+
+          gradle = 'app/build.gradle'
+          replace_once(gradle, "        versionCode 10\n        versionName '1.5.0'\n",
+                               "        versionCode 11\n        versionName '1.6.0'\n")
+
+          Path('.github/workflows/apply-v1.6-prosody.yml').unlink()
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Integrate Burmese Prosody Engine v1 [prosody-integrated]'
+          git push origin HEAD:feature/v1.6.0-burmese-prosody
