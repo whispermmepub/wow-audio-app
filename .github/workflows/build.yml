@@ -121,6 +121,53 @@ jobs:
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
           ls -lh "$APK"
 
+      - name: Decode permanent update keystore
+        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        shell: bash
+        env:
+          WOW_AUDIO_KEYSTORE_B64: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$WOW_AUDIO_KEYSTORE_B64" | base64 --decode > /tmp/WoW-Audio-update-key.jks
+          test -s /tmp/WoW-Audio-update-key.jks
+          chmod 600 /tmp/WoW-Audio-update-key.jks
+
+      - name: Sign update-install APK with permanent key
+        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        shell: bash
+        env:
+          STORE_PASSWORD: ${{ secrets.WOW_AUDIO_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.WOW_AUDIO_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.WOW_AUDIO_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
+          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.2.0-UPDATE-signed.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" sign \
+            --ks /tmp/WoW-Audio-update-key.jks \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:STORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "$SIGNED" "$UNSIGNED"
+          "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee /tmp/apksigner.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/apksigner.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/apksigner.txt
+          grep -qi '5f58ab463c3a43275dd768fb3bdb2aaef388b5c18a4d6076b0c5339b4aee0fe1' /tmp/apksigner.txt
+          ls -lh "$SIGNED"
+
+      - name: Upload v1.2.0 update-install signed APK
+        if: ${{ secrets.WOW_AUDIO_KEYSTORE_B64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.2.0-UPDATE-signed
+          path: app/build/outputs/apk/release/WoW-Audio-v1.2.0-UPDATE-signed.apk
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Upload v1.2.0 test APK
         uses: actions/upload-artifact@v4
         with:
