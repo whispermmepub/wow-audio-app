@@ -3,8 +3,6 @@ package com.whisper.wowaudio;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-import java.util.Locale;
-
 final class VoiceSettings {
     static final String PREFS = "voice_settings_v2";
     static final String ENGINE_EDGE = "edge";
@@ -200,7 +198,15 @@ final class VoiceSettings {
     }
 
     static String speedLabel(Context context) {
-        return String.format(Locale.US, "%.2gx", playbackSpeed(context)).replace("1x", "1.0x");
+        float value = playbackSpeed(context);
+        if (near(value, 0.75f)) return "0.75x";
+        if (near(value, 0.9f)) return "0.9x";
+        if (near(value, 1.0f)) return "1.0x";
+        if (near(value, 1.1f)) return "1.1x";
+        if (near(value, 1.25f)) return "1.25x";
+        if (near(value, 1.5f)) return "1.5x";
+        if (near(value, 1.75f)) return "1.75x";
+        return "2.0x";
     }
 
     static String toneLabel(Context context) {
@@ -227,6 +233,10 @@ final class VoiceSettings {
         if (ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice(context);
         if (ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
         return EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice(context)) ? "Thiha" : "Nilar";
+    }
+
+    private static boolean near(float a, float b) {
+        return Math.abs(a - b) < 0.01f;
     }
 
     private static float clamp(float value, float min, float max) {
