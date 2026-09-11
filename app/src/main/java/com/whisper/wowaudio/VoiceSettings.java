@@ -27,6 +27,7 @@ final class VoiceSettings {
     static final String STYLE_EMOTIONAL = "emotional";
 
     static final float[] PLAYBACK_SPEEDS = new float[]{0.75f, 0.9f, 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f};
+    static final int[] VOLUME_BOOSTS_MB = new int[]{0, 300, 600, 900, 1200};
     static final String[] TONES = new String[]{TONE_NORMAL, TONE_SOFT, TONE_DEEP, TONE_BRIGHT};
     static final String[] READING_STYLES = new String[]{
             STYLE_AUTO, STYLE_NORMAL, STYLE_NARRATOR, STYLE_STORYTELLER,
@@ -126,6 +127,27 @@ final class VoiceSettings {
         return next;
     }
 
+    static int volumeBoostMb(Context context) {
+        int value = prefs(context).getInt("volume_boost_mb", 300);
+        for (int allowed : VOLUME_BOOSTS_MB) if (allowed == value) return value;
+        return 300;
+    }
+
+    static void setVolumeBoostMb(Context context, int value) {
+        int safe = 300;
+        for (int allowed : VOLUME_BOOSTS_MB) if (allowed == value) safe = allowed;
+        prefs(context).edit().putInt("volume_boost_mb", safe).apply();
+    }
+
+    static int cycleVolumeBoost(Context context) {
+        int current = volumeBoostMb(context);
+        int index = 0;
+        for (int i = 0; i < VOLUME_BOOSTS_MB.length; i++) if (VOLUME_BOOSTS_MB[i] == current) index = i;
+        int next = VOLUME_BOOSTS_MB[(index + 1) % VOLUME_BOOSTS_MB.length];
+        setVolumeBoostMb(context, next);
+        return next;
+    }
+
     static String tone(Context context) {
         String value = prefs(context).getString("voice_tone", TONE_NORMAL);
         for (String allowed : TONES) if (allowed.equals(value)) return value;
@@ -207,6 +229,12 @@ final class VoiceSettings {
         if (near(value, 1.5f)) return "1.5x";
         if (near(value, 1.75f)) return "1.75x";
         return "2.0x";
+    }
+
+    static String volumeLabel(Context context) {
+        int mb = volumeBoostMb(context);
+        if (mb <= 0) return "Normal";
+        return "+" + (mb / 100) + " dB";
     }
 
     static String toneLabel(Context context) {
