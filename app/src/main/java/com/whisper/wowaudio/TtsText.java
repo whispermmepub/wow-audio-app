@@ -5,13 +5,13 @@ import java.util.List;
 
 final class TtsText {
     private static final int FIRST_MAX_CHARS = 170;
-    private static final int NEXT_MAX_CHARS = 480;
+    private static final int NEXT_MAX_CHARS = 360;
 
     private TtsText() { }
 
     /**
-     * Small first segment gives fast first speech; subsequent larger segments give the prefetch
-     * thread enough playback time to stay ahead. Boundaries prefer Burmese sentence punctuation.
+     * Keep first speech fast, then use shorter phrase-focused chunks so Auto Mood can react to
+     * dialogue, sentence endings and emotion more precisely without changing the TTS provider.
      */
     static List<String> chunks(String text) {
         List<String> out = new ArrayList<>();
@@ -26,7 +26,7 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 60 : 180);
+            int end = findBreak(normalized, start, limit, first ? 58 : 120);
             if (end <= start) end = limit;
             String chunk = clean(normalized.substring(start, end));
             if (!chunk.isEmpty() && containsMyanmar(chunk)) {
@@ -69,20 +69,51 @@ final class TtsText {
     private static int findBreak(String text, int start, int limit, int minChars) {
         if (limit >= text.length()) return text.length();
         int floor = Math.min(limit - 1, start + Math.max(24, minChars));
-        // Prefer the first complete sentence after the minimum length. This keeps mood chunks
-        // focused without making the fast first-speech path too chatty.
+
+        // Paragraph boundaries carry the strongest natural pause.
+        for (int i = floor; i + 1 < limit; i++) {
+            if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
+        }
+
+        // Prefer the first full sentence after the minimum length. Include a closing quote so the
+        // following chunk starts cleanly with a new narrator/dialogue phrase.
         for (int i = floor; i < limit; i++) {
             char c = text.charAt(i);
-            if (c == '။' || c == '!' || c == '?' || c == '…' || c == '.' || c == '\n') return i + 1;
+            if (c == '။' || c == '!' || c == '?' || c == '…') return includeClosingQuotes(text, i + 1, limit);
+            if (c == '.' && englishSentenceEnd(text, i)) return includeClosingQuotes(text, i + 1, limit);
         }
+
+        // A single structural line break is useful, but less important than sentence punctuation.
+        for (int i = floor; i < limit; i++) {
+            if (text.charAt(i) == '\n') return i + 1;
+        }
+
+        // Phrase punctuation is a fallback when a sentence is long.
         for (int i = limit - 1; i >= floor; i--) {
             char c = text.charAt(i);
-            if (c == '၊' || c == ',' || c == ';' || c == ':') return i + 1;
+            if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
         for (int i = limit - 1; i >= floor; i--) {
             if (Character.isWhitespace(text.charAt(i))) return i + 1;
         }
         return limit;
+    }
+
+    private static boolean englishSentenceEnd(String text, int index) {
+        int next = index + 1;
+        if (next >= text.length()) return true;
+        char c = text.charAt(next);
+        return Character.isWhitespace(c) || c == '”' || c == '’' || c == '"' || c == '\'' || c == ')' || c == ']';
+    }
+
+    private static int includeClosingQuotes(String text, int end, int limit) {
+        int out = end;
+        while (out < limit && out < text.length()) {
+            char c = text.charAt(out);
+            if (c == '”' || c == '’' || c == '"' || c == '\'' || c == '»' || c == ')' || c == ']') out++;
+            else break;
+        }
+        return out;
     }
 
     private static boolean containsMyanmar(String value) {
