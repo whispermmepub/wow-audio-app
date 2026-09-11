@@ -126,6 +126,23 @@ jobs:
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
           ls -lh "$APK"
 
+      - name: Export apksigner utility for local private-key signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNER_JAR=$(find "$ANDROID_HOME/build-tools" -type f -path '*/lib/apksigner.jar' | sort -V | tail -n 1)
+          test -s "$SIGNER_JAR"
+          cp "$SIGNER_JAR" /tmp/apksigner.jar
+          ls -lh /tmp/apksigner.jar
+
+      - name: Upload apksigner utility
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-apksigner-tool
+          path: /tmp/apksigner.jar
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Decode permanent update keystore
         if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         shell: bash
