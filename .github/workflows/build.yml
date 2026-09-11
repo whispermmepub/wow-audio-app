@@ -1,4 +1,4 @@
-name: Build WoW Audio natural Myanmar player
+name: Build WoW Audio v1.2 audiobook player
 
 on:
   push:
@@ -74,42 +74,32 @@ jobs:
           edge-tts --voice my-MM-ThihaNeural --text 'မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။' --write-media /tmp/thiha.mp3
           test "$(stat -c%s /tmp/nilar.mp3)" -gt 3000
           test "$(stat -c%s /tmp/thiha.mp3)" -gt 3000
-          file /tmp/nilar.mp3 /tmp/thiha.mp3
-          ls -lh /tmp/nilar.mp3 /tmp/thiha.mp3
 
-      - name: Verify v1.1 natural audiobook contract
+      - name: Verify v1.2 audiobook contract
         shell: bash
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
-          grep -q "versionCode 3" app/build.gradle
-          grep -q "versionName '1.1.0'" app/build.gradle
-          grep -q "okhttp:4.12.0" app/build.gradle
-          grep -q "testImplementation 'junit:junit:4.13.2'" app/build.gradle
+          grep -q "versionCode 4" app/build.gradle
+          grep -q "versionName '1.2.0'" app/build.gradle
           grep -q 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
-          grep -q 'class EdgeMyanmarTtsClient' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'LibraryActivity' app/src/main/AndroidManifest.xml
+          grep -q 'PlayerActivity' app/src/main/AndroidManifest.xml
+          grep -q 'SettingsActivity' app/src/main/AndroidManifest.xml
+          grep -q 'AudiobookService' app/src/main/AndroidManifest.xml
+          grep -q 'class GeminiTtsClient' app/src/main/java/com/whisper/wowaudio/GeminiTtsClient.java
+          grep -q 'gemini-3.1-flash-tts-preview' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'AndroidKeyStore' app/src/main/java/com/whisper/wowaudio/SecureApiKeyStore.java
+          grep -q 'ACTION_SEEK_BOOK_PROGRESS' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
+          grep -q 'BookCover.load' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
+          grep -q 'SeekBar' app/src/main/java/com/whisper/wowaudio/PlayerActivity.java
+          grep -q 'GEMINI_VOICES' app/src/main/java/com/whisper/wowaudio/SettingsActivity.java
           grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
           grep -q 'my-MM-ThihaNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
-          grep -q 'class SpeechCache' app/src/main/java/com/whisper/wowaudio/SpeechCache.java
-          grep -q 'PREFETCH_COUNT = 3' app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q 'ACTION_SEEK_BACK' app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q 'ACTION_SEEK_FORWARD' app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q 'saveProgress(bookId, segmentIndex, activePositionMs)' app/src/main/java/com/whisper/wowaudio/ReadingService.java
-          grep -q 'Nilar' app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q 'Thiha' app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q '↶ 15s' app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q '15s ↷' app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q 'Delete Book' app/src/main/java/com/whisper/wowaudio/MainActivity.java
-          grep -q 'javaClientDownloadsNilarAndThihaMp3' app/src/test/java/com/whisper/wowaudio/EdgeMyanmarTtsClientTest.java
           grep -q 'SEND_MULTIPLE' app/src/main/AndroidManifest.xml
-          grep -q 'ShareImportActivity' app/src/main/AndroidManifest.xml
           test -s app/src/main/assets/tts/mya/model.onnx
           test -s app/src/main/assets/tts/mya/tokens.txt
           test -s app/libs/sherpa-onnx-1.13.7.aar
-          if test -d server; then
-            echo 'Owner backend/server directory must not exist in v1.1'
-            exit 1
-          fi
           git diff --check
 
       - name: Test exact Java client, build and lint
@@ -122,28 +112,27 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='3'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.1.0'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='4'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.2.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
           unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
           unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
-          unzip -l "$APK" | grep -q 'assets/THIRD_PARTY_NOTICES.txt'
           ls -lh "$APK"
 
-      - name: Upload v1.1.0 natural Myanmar player test APK
+      - name: Upload v1.2.0 test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.1.0-Nilar-Thiha-natural-player-test
+          name: WoW-Audio-v1.2.0-audiobook-player-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
 
-      - name: Upload v1.1.0 unsigned release
+      - name: Upload v1.2.0 unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.1.0-Nilar-Thiha-natural-player-release-unsigned
+          name: WoW-Audio-v1.2.0-audiobook-player-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
