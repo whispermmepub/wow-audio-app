@@ -12,8 +12,8 @@ public final class EdgeMyanmarTtsClientTest {
         assertTrue(root.mkdirs() || root.isDirectory());
 
         try (EdgeMyanmarTtsClient client = new EdgeMyanmarTtsClient()) {
-            assertVoice(client, EdgeMyanmarTtsClient.VOICE_NILAR, new File(root, "nilar.mp3"));
-            assertVoice(client, EdgeMyanmarTtsClient.VOICE_THIHA, new File(root, "thiha.mp3"));
+            assertVoiceWithRetry(client, EdgeMyanmarTtsClient.VOICE_NILAR, new File(root, "nilar.mp3"));
+            assertVoiceWithRetry(client, EdgeMyanmarTtsClient.VOICE_THIHA, new File(root, "thiha.mp3"));
         } finally {
             File[] files = root.listFiles();
             if (files != null) for (File file : files) file.delete();
@@ -21,17 +21,30 @@ public final class EdgeMyanmarTtsClientTest {
         }
     }
 
-    private static void assertVoice(EdgeMyanmarTtsClient client, String voice, File output) throws Exception {
-        long started = System.nanoTime();
-        File result = client.synthesizeToFile(
-                "မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။ မြန်မာစာအုပ်ကို နားထောင်နေပါတယ်။",
-                voice,
-                1.0f,
-                output);
-        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
-        System.out.println(voice + " Java client: " + result.length() + " bytes in " + elapsedMs + " ms");
-        assertTrue(result.isFile());
-        assertTrue("Expected usable MP3 for " + voice, result.length() > 3000L);
-        assertTrue("Natural voice request took too long for " + voice, elapsedMs < 20_000L);
+    private static void assertVoiceWithRetry(EdgeMyanmarTtsClient client, String voice, File output) throws Exception {
+        Exception last = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (output.exists()) output.delete();
+                long started = System.nanoTime();
+                File result = client.synthesizeToFile(
+                        "မင်္ဂလာပါ။ WoW Audio မှ ကြိုဆိုပါတယ်။ မြန်မာစာအုပ်ကို နားထောင်နေပါတယ်။",
+                        voice,
+                        1.0f,
+                        output);
+                long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+                System.out.println(voice + " Java client attempt " + attempt + ": "
+                        + result.length() + " bytes in " + elapsedMs + " ms");
+                assertTrue(result.isFile());
+                assertTrue("Expected usable MP3 for " + voice, result.length() > 3000L);
+                assertTrue("Natural voice request took too long for " + voice, elapsedMs < 40_000L);
+                return;
+            } catch (Exception e) {
+                last = e;
+                System.out.println(voice + " transient attempt " + attempt + " failed: " + e);
+                if (attempt < 3) Thread.sleep(1200L * attempt);
+            }
+        }
+        throw last == null ? new IllegalStateException("Natural voice test failed") : last;
     }
 }
