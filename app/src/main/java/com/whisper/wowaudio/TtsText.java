@@ -5,7 +5,7 @@ import java.util.List;
 
 final class TtsText {
     private static final int FIRST_MAX_CHARS = 170;
-    private static final int NEXT_MAX_CHARS = 620;
+    private static final int NEXT_MAX_CHARS = 480;
 
     private TtsText() { }
 
@@ -69,9 +69,11 @@ final class TtsText {
     private static int findBreak(String text, int start, int limit, int minChars) {
         if (limit >= text.length()) return text.length();
         int floor = Math.min(limit - 1, start + Math.max(24, minChars));
-        for (int i = limit - 1; i >= floor; i--) {
+        // Prefer the first complete sentence after the minimum length. This keeps mood chunks
+        // focused without making the fast first-speech path too chatty.
+        for (int i = floor; i < limit; i++) {
             char c = text.charAt(i);
-            if (c == '။' || c == '!' || c == '?' || c == '\n') return i + 1;
+            if (c == '။' || c == '!' || c == '?' || c == '…' || c == '.' || c == '\n') return i + 1;
         }
         for (int i = limit - 1; i >= floor; i--) {
             char c = text.charAt(i);

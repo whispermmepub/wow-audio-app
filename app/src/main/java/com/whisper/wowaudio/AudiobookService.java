@@ -81,6 +81,7 @@ public final class AudiobookService extends Service {
     private volatile float activePlaybackSpeed = 1.0f;
     private volatile float activePlaybackPitch = 1.0f;
     private volatile int activeVolumeBoostMb = 300;
+    private volatile BurmeseProsody.Profile activeProsody = BurmeseProsody.neutral();
     private volatile long edgeRetryAfterMs;
     private volatile long geminiRetryAfterMs;
 
@@ -246,6 +247,7 @@ public final class AudiobookService extends Service {
 
                 activeSegment = index;
                 activeText = segments.get(index);
+                activeProsody = BurmeseProsody.analyze(activeText, VoiceSettings.readingStyle(this));
                 activeDurationMs = 0;
                 File audio = ensureAudio(target, index, activeText, profile, true, token);
                 if (audio == null || token != sessionToken) return;
@@ -259,6 +261,7 @@ public final class AudiobookService extends Service {
 
                 boolean completed = playFileBlocking(audio, target.id, index, startMs, token);
                 if (token != sessionToken || !completed) return;
+                waitBetweenSegments(profile, token);
 
                 index++;
                 activeSegment = index;
@@ -569,6 +572,7 @@ public final class AudiobookService extends Service {
         activePlaybackSpeed = newSpeed;
         activePlaybackPitch = newPitch;
         activeVolumeBoostMb = newVolumeBoostMb;
+        activeProsody = BurmeseProsody.analyze(activeText, VoiceSettings.readingStyle(this));
 
         BookStore.Book book = activeBook;
         if (book == null) {
@@ -600,8 +604,9 @@ public final class AudiobookService extends Service {
         if (player == null) return;
         try {
             PlaybackParams params = player.getPlaybackParams();
-            params.setSpeed(activePlaybackSpeed);
-            params.setPitch(activePlaybackPitch);
+            BurmeseProsody.Profile prosody = effectiveProsody();
+            params.setSpeed(clampFloat(activePlaybackSpeed * prosody.speedMultiplier, 0.60f, 2.0f));
+            params.setPitch(clampFloat(activePlaybackPitch * prosody.pitchMultiplier, 0.85f, 1.20f));
             player.setPlaybackParams(params);
         } catch (Throwable ignored) { }
     }
@@ -620,9 +625,32 @@ public final class AudiobookService extends Service {
     private void applyVolumeBoost(LoudnessEnhancer enhancer) {
         if (enhancer == null) return;
         try {
-            enhancer.setTargetGain(Math.max(0, activeVolumeBoostMb));
-            enhancer.setEnabled(activeVolumeBoostMb > 0);
+            int target = Math.max(0, Math.min(1200, activeVolumeBoostMb + effectiveProsody().gainMb));
+            enhancer.setTargetGain(target);
+            enhancer.setEnabled(target > 0);
         } catch (Throwable ignored) { }
+    }
+
+    private BurmeseProsody.Profile effectiveProsody() {
+        Profile profile = activeProfile;
+        if (profile != null && VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) return BurmeseProsody.neutral();
+        BurmeseProsody.Profile p = activeProsody;
+        return p == null ? BurmeseProsody.neutral() : p;
+    }
+
+    private void waitBetweenSegments(Profile profile, long token) {
+        if (profile != null && VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) return;
+        int waitMs = effectiveProsody().pauseAfterMs;
+        long end = System.currentTimeMillis() + waitMs;
+        while (token == sessionToken && System.currentTimeMillis() < end) {
+            if (Thread.currentThread().isInterrupted()) return;
+            try { Thread.sleep(Math.min(30L, Math.max(1L, end - System.currentTimeMillis()))); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        }
+    }
+
+    private static float clampFloat(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private static void releaseEnhancer(LoudnessEnhancer enhancer) {

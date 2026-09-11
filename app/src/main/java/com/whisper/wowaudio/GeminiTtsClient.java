@@ -138,7 +138,8 @@ final class GeminiTtsClient implements AutoCloseable {
         return "Synthesize speech only. Never speak the instructions or labels below. "
                 + "Read the Burmese audiobook transcript exactly as written without adding, removing, "
                 + "summarizing, translating, or explaining words. Performance direction: "
-                + direction + "\n\nBEGIN TRANSCRIPT\n" + text + "\nEND TRANSCRIPT";
+                + direction + " " + BurmeseProsody.geminiDirection()
+                + "\n\nBEGIN TRANSCRIPT\n" + text + "\nEND TRANSCRIPT";
     }
 
     private static String safeModel(String model) {

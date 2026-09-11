@@ -20,7 +20,7 @@ final class AudioCache {
                        String style, String text) {
         String profile = safe(model) + "__" + safe(voice);
         File dir = new File(book.directory, "speech-cache/gemini/" + profile);
-        String signature = sha256(model + "\n" + voice + "\n" + style + "\n" + text);
+        String signature = sha256(BurmeseProsody.RENDER_VERSION + "\n" + model + "\n" + voice + "\n" + style + "\n" + text);
         return new File(dir, String.format(Locale.US, "%05d-%s.wav", index, signature.substring(0, 16)));
     }
 
