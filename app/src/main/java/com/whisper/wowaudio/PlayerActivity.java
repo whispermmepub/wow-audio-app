@@ -25,7 +25,7 @@ import androidx.core.content.ContextCompat;
 
 import java.util.Locale;
 
-/** Full-screen audiobook player with a book-level scrub bar and accessible controls. */
+/** Full-screen audiobook player with book scrub, live speed/tone and narration style controls. */
 public final class PlayerActivity extends Activity {
     private static final int NAVY = Color.rgb(9, 34, 82);
     private static final int NAVY_LIGHT = Color.rgb(22, 66, 137);
@@ -50,6 +50,9 @@ public final class PlayerActivity extends Activity {
     private TextView voice;
     private SeekBar seek;
     private Button playPause;
+    private Button speedButton;
+    private Button toneButton;
+    private Button styleButton;
     private boolean playing;
     private boolean dragging;
 
@@ -68,10 +71,12 @@ public final class PlayerActivity extends Activity {
         book = new BookStore(this).get(bookId);
         build();
         bindBook();
+        refreshNarrationButtons();
     }
 
     @Override protected void onResume() {
         super.onResume();
+        refreshNarrationButtons();
         ContextCompat.registerReceiver(this, receiver,
                 new IntentFilter(AudiobookService.ACTION_STATE),
                 ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -191,6 +196,39 @@ public final class PlayerActivity extends Activity {
         part.setGravity(Gravity.CENTER);
         root.addView(part, marginTop(5));
 
+        LinearLayout narration = new LinearLayout(this);
+        narration.setGravity(Gravity.CENTER);
+        speedButton = narrationButton("1.0x");
+        speedButton.setOnClickListener(v -> {
+            VoiceSettings.cyclePlaybackSpeed(this);
+            refreshNarrationButtons();
+            send(AudiobookService.ACTION_NARRATION_SETTINGS_CHANGED);
+        });
+        narration.addView(speedButton, new LinearLayout.LayoutParams(0, dp(58), 0.75f));
+
+        toneButton = narrationButton("Tone • Normal");
+        toneButton.setOnClickListener(v -> {
+            VoiceSettings.cycleTone(this);
+            refreshNarrationButtons();
+            send(AudiobookService.ACTION_NARRATION_SETTINGS_CHANGED);
+        });
+        narration.addView(toneButton, withLeft(new LinearLayout.LayoutParams(0, dp(58), 1.15f), 6));
+
+        styleButton = narrationButton("Style • Auto Mood");
+        styleButton.setOnClickListener(v -> {
+            VoiceSettings.cycleReadingStyle(this);
+            refreshNarrationButtons();
+            send(AudiobookService.ACTION_NARRATION_SETTINGS_CHANGED);
+        });
+        narration.addView(styleButton, withLeft(new LinearLayout.LayoutParams(0, dp(58), 1.35f), 6));
+        root.addView(narration, marginTop(18));
+
+        TextView narrationHint = label(
+                "Speed နဲ့ Tone က Nilar / Thiha / Gemini / Offline အားလုံးမှာ ချက်ချင်းပြောင်းပါတယ်။ Auto Mood / Narrator / Storyteller စတဲ့ Reading Style တွေက Gemini မှာ စာသားရဲ့ခံစားချက်နဲ့လိုက်ပြီး ပိုသဘာဝကျပါတယ်။",
+                12, WHITE_MUTED, false);
+        narrationHint.setLineSpacing(0, 1.2f);
+        root.addView(narrationHint, marginTop(8));
+
         LinearLayout controls = new LinearLayout(this);
         controls.setGravity(Gravity.CENTER);
         Button previous = control("|◀");
@@ -218,7 +256,7 @@ public final class PlayerActivity extends Activity {
         next.setContentDescription("Next section");
         next.setOnClickListener(v -> send(AudiobookService.ACTION_NEXT));
         controls.addView(next, withLeft(new LinearLayout.LayoutParams(0, dp(66), 1f), 6));
-        root.addView(controls, marginTop(24));
+        root.addView(controls, marginTop(20));
 
         Button stop = darkButton("Stop and save position");
         stop.setContentDescription("Stop reading and save position");
@@ -259,6 +297,13 @@ public final class PlayerActivity extends Activity {
         String currentText = state.getStringExtra(AudiobookService.EXTRA_TEXT);
         if (currentText != null && !currentText.isEmpty()) readingText.setText(currentText);
 
+        String speedLabel = state.getStringExtra(AudiobookService.EXTRA_SPEED_LABEL);
+        String toneLabel = state.getStringExtra(AudiobookService.EXTRA_TONE_LABEL);
+        String styleLabel = state.getStringExtra(AudiobookService.EXTRA_STYLE_LABEL);
+        if (speedLabel != null && !speedLabel.isEmpty()) speedButton.setText(speedLabel);
+        if (toneLabel != null && !toneLabel.isEmpty()) toneButton.setText("Tone • " + toneLabel);
+        if (styleLabel != null && !styleLabel.isEmpty()) styleButton.setText("Style • " + styleLabel);
+
         int index = state.getIntExtra(AudiobookService.EXTRA_SEGMENT_INDEX, 0);
         int count = Math.max(1, state.getIntExtra(AudiobookService.EXTRA_SEGMENT_COUNT, 1));
         int position = Math.max(0, state.getIntExtra(AudiobookService.EXTRA_POSITION_MS, 0));
@@ -270,6 +315,16 @@ public final class PlayerActivity extends Activity {
         duration.setText(length > 0 ? formatTime(length) : "--:--");
         part.setText("Part " + Math.min(index + 1, count) + " / " + count
                 + " • Book " + Math.round(progress / 100f) + "%");
+    }
+
+    private void refreshNarrationButtons() {
+        if (speedButton == null || toneButton == null || styleButton == null) return;
+        speedButton.setText(VoiceSettings.speedLabel(this));
+        speedButton.setContentDescription("Playback speed " + VoiceSettings.speedLabel(this) + ". Tap to change.");
+        toneButton.setText("Tone • " + VoiceSettings.toneLabel(this));
+        toneButton.setContentDescription("Voice tone " + VoiceSettings.toneLabel(this) + ". Tap to change.");
+        styleButton.setText("Style • " + VoiceSettings.readingStyleLabel(this));
+        styleButton.setContentDescription("Reading style " + VoiceSettings.readingStyleLabel(this) + ". Tap to change.");
     }
 
     private void showCover() {
@@ -313,6 +368,14 @@ public final class PlayerActivity extends Activity {
         bg.setColor(selected ? Color.rgb(55, 91, 154) : Color.rgb(16, 48, 103));
         bg.setCornerRadius(dp(22));
         b.setBackground(bg);
+    }
+
+    private Button narrationButton(String label) {
+        Button b = darkButton(label);
+        b.setTextSize(12);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setPadding(dp(5), 0, dp(5), 0);
+        return b;
     }
 
     private Button control(String label) {
