@@ -1,0 +1,121 @@
+name: Export F5 Myanmar ONNX
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/export-f5-myanmar-onnx.yml'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout WoW Audio
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install export dependencies
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          git clone --depth 1 https://github.com/DakeQQ/F5-TTS-ONNX.git /tmp/F5-TTS-ONNX
+          python -m pip install -r /tmp/F5-TTS-ONNX/Export_ONNX/F5_TTS/requirements.txt
+          python -m pip install --upgrade huggingface-hub hf-xet
+
+      - name: Download F5 Myanmar v2 and Vocos
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='freococo/F5-Myanmar-TTS',
+              local_dir='/tmp/f5-myanmar',
+          )
+          snapshot_download(
+              repo_id='charactr/vocos-mel-24khz',
+              local_dir='/tmp/vocos-mel-24khz',
+          )
+          PY
+
+      - name: Locate custom checkpoint and vocabulary
+        id: files
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL="$(find /tmp/f5-myanmar -type f -name '*.safetensors' -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          VOCAB="$(find /tmp/f5-myanmar -type f \( -iname 'vocab.txt' -o -iname 'vocab_*.txt' -o -iname 'vocab*.txt' \) | head -n1)"
+          if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
+            echo 'No F5 Myanmar safetensors checkpoint found.' >&2
+            find /tmp/f5-myanmar -maxdepth 3 -type f | sort >&2
+            exit 1
+          fi
+          if [ -z "$VOCAB" ] || [ ! -f "$VOCAB" ]; then
+            echo 'No F5 Myanmar vocabulary found.' >&2
+            find /tmp/f5-myanmar -maxdepth 3 -type f | sort >&2
+            exit 1
+          fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "vocab=$VOCAB" >> "$GITHUB_OUTPUT"
+          echo "Checkpoint: $MODEL"
+          echo "Vocabulary: $VOCAB"
+          ls -lh "$MODEL" "$VOCAB"
+
+      - name: Validate F5 custom checkpoint against exporter
+        run: |
+          python /tmp/F5-TTS-ONNX/Export_ONNX/F5_TTS/Export_F5.py \
+            --model-series v1 \
+            --f5-safetensor-path '${{ steps.files.outputs.model }}' \
+            --vocab-path '${{ steps.files.outputs.vocab }}' \
+            --vocos-model-dir /tmp/vocos-mel-24khz \
+            --check-config
+
+      - name: Export FP16 ONNX voice foundation
+        run: |
+          mkdir -p /tmp/aung-gyi-f5-onnx
+          python /tmp/F5-TTS-ONNX/Export_ONNX/F5_TTS/Export_F5.py \
+            --model-series v1 \
+            --f5-safetensor-path '${{ steps.files.outputs.model }}' \
+            --vocab-path '${{ steps.files.outputs.vocab }}' \
+            --vocos-model-dir /tmp/vocos-mel-24khz \
+            --preprocess-model-path /tmp/aung-gyi-f5-onnx/F5_Preprocess.onnx \
+            --transformer-model-path /tmp/aung-gyi-f5-onnx/F5_Transformer.onnx \
+            --decoder-model-path /tmp/aung-gyi-f5-onnx/F5_Decode.onnx \
+            --metadata-model-path /tmp/aung-gyi-f5-onnx/F5_Metadata.onnx \
+            --fp16transformer \
+            --prepro-input-type f32 \
+            --decoder-output-type f32 \
+            --skip-inference
+
+      - name: Assemble private-install model pack
+        run: |
+          set -euo pipefail
+          cp '${{ steps.files.outputs.vocab }}' /tmp/aung-gyi-f5-onnx/vocab.txt
+          cat > /tmp/aung-gyi-f5-onnx/README.txt <<'EOF'
+          WoW Audio local F5 Myanmar foundation pack
+          Model: freococo/F5-Myanmar-TTS
+          License: CC BY-NC 4.0 — non-commercial use only
+          Runtime target: ONNX Runtime Android
+          Sample rate: 24000 Hz
+
+          This pack intentionally does NOT contain a user's private reference voice.
+          Install the user-authorized Aung Gyi reference WAV separately in app-private storage.
+          EOF
+          (cd /tmp/aung-gyi-f5-onnx && sha256sum * > SHA256SUMS.txt)
+          ls -lh /tmp/aung-gyi-f5-onnx
+
+      - name: Upload ONNX model pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-F5-Myanmar-ONNX-NONCOMMERCIAL
+          path: /tmp/aung-gyi-f5-onnx/
+          retention-days: 7
+          compression-level: 0
