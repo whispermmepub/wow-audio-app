@@ -84,7 +84,7 @@ jobs:
           grep -q 'STYLE_GEMINI_EXPRESSIVE' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
           grep -q 'ENGINE_F5' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
           grep -q 'F5LocalTtsEngine' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
-          grep -q 'onnxruntime-android:1.23.2' app/build.gradle
+          grep -q 'onnxruntime-android:1.29.0' app/build.gradle
           grep -q 'VIEW_SMALL_LIST' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'VIEW_SMALL_GRID' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
@@ -92,6 +92,10 @@ jobs:
           test -s app/src/main/assets/tts/mya/model.onnx
           test -s app/src/main/assets/tts/mya/tokens.txt
           test -s app/libs/sherpa-onnx-1.13.7.aar
+          if unzip -l app/libs/sherpa-onnx-1.13.7.aar | grep -q 'libonnxruntime.so'; then
+            echo 'Sherpa AAR still contains duplicate libonnxruntime.so' >&2
+            exit 1
+          fi
           git diff --check
 
       - name: Test speech cleanup and pause prosody, build and lint
@@ -116,6 +120,7 @@ jobs:
           unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libonnxruntime.so'
+          test "$(unzip -l "$APK" | grep -c 'lib/arm64-v8a/libonnxruntime.so')" -eq 1
           ls -lh "$APK"
 
       - name: Export apksigner utility for local private-key signing
