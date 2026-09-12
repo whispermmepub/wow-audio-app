@@ -78,24 +78,25 @@ final class TtsText {
         for (int i = start; i + 1 < limit; i++) {
             if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
         }
-        for (int i = floor; i < limit; i++) {
+        for (int i = start; i < limit; i++) {
             if (text.charAt(i) == '\n') return i + 1;
         }
 
-        // Full Burmese sentence endings are hard boundaries. Include closing quotes so the next
-        // segment starts cleanly and the service can insert a deliberate pause between segments.
-        for (int i = floor; i < limit; i++) {
+        // Full Burmese sentence endings are hard boundaries. Do not require a minimum chunk size:
+        // a short sentence must still stop at '။' rather than run into the next sentence.
+        for (int i = start; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '။' || c == '!' || c == '?' || c == '…') return includeClosingQuotes(text, i + 1, limit);
             if (c == '.' && englishSentenceEnd(text, i)) return includeClosingQuotes(text, i + 1, limit);
         }
 
-        // Burmese phrase comma is also a reading boundary. Prefer it over an arbitrary whitespace
-        // split so a short natural breath is possible at '၊'.
-        for (int i = floor; i < limit; i++) {
+        // Burmese phrase comma also deserves a short breath, even in a short phrase.
+        for (int i = start; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
+
+        // Only arbitrary whitespace splitting keeps the minimum-length guard.
         for (int i = limit - 1; i >= floor; i--) {
             if (Character.isWhitespace(text.charAt(i))) return i + 1;
         }
