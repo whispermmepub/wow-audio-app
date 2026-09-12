@@ -28,7 +28,7 @@ jobs:
       - name: Install ONNX quantization dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install 'onnxruntime>=1.23' 'onnx>=1.17' onnxslim onnxconverter-common
+          python -m pip install 'onnxruntime>=1.23' 'onnx>=1.17' onnx-ir onnxslim onnxconverter-common
           git clone --depth 1 https://github.com/DakeQQ/F5-TTS-ONNX.git /tmp/F5-TTS-ONNX
 
       - name: Download small F5 graphs from verified export
