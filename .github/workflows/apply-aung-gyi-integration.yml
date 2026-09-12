@@ -40,12 +40,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet; then
+          # GitHub App tokens cannot update another workflow file. build.yml is updated separately.
+          git restore .github/workflows/build.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle app/src/main/java/com/whisper/wowaudio/VoiceSettings.java app/src/main/java/com/whisper/wowaudio/AudioCache.java app/src/main/java/com/whisper/wowaudio/SettingsActivity.java app/src/main/java/com/whisper/wowaudio/AudiobookService.java
+          if git diff --cached --quiet; then
             echo 'No source changes to commit.'
             exit 0
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/build.gradle app/src/main/java/com/whisper/wowaudio/VoiceSettings.java app/src/main/java/com/whisper/wowaudio/AudioCache.java app/src/main/java/com/whisper/wowaudio/SettingsActivity.java app/src/main/java/com/whisper/wowaudio/AudiobookService.java .github/workflows/build.yml
           git commit -m 'Integrate Aung Gyi local F5 voice v1.9.0'
           git push origin HEAD:feature/v1.9.0-aung-gyi-f5-local
