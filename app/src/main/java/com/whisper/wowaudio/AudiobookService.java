@@ -298,6 +298,9 @@ public final class AudiobookService extends Service {
 
     private File ensureAudio(BookStore.Book book, int index, String text, Profile profile,
                              boolean allowFallback, long token) throws Exception {
+        // Never cross-read a different Edge voice. The requested profile is authoritative for the
+        // whole session, and its cache path is voice-specific. If the selected Edge voice cannot
+        // be produced, use the offline fallback rather than substituting another Nilar/Thiha cache.
         File requested = AudioCache.existing(book, index, profile.engine, profile.edgeVoice,
                 profile.geminiModel, profile.geminiVoice, profile.geminiStyle, profile.speed, text);
         if (requested != null) return requested;
@@ -759,24 +762,25 @@ public final class AudiobookService extends Service {
     }
 
     private static void releasePlayer(MediaPlayer player) {
+        if (player == null) return;
         try { player.stop(); } catch (Exception ignored) { }
         try { player.reset(); } catch (Exception ignored) { }
         try { player.release(); } catch (Exception ignored) { }
     }
 
-    private static int safePosition(MediaPlayer player) {
-        if (player == null) return 0;
+    private int safePosition(MediaPlayer player) {
+        if (player == null) return activePositionMs;
         try { return Math.max(0, player.getCurrentPosition()); }
-        catch (IllegalStateException ignored) { return 0; }
+        catch (Exception ignored) { return activePositionMs; }
     }
 
-    private static int durationOf(File file) {
+    private int durationOf(File file) {
         if (file == null || !file.isFile()) return 0;
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
             retriever.setDataSource(file.getAbsolutePath());
-            String value = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            return value == null ? 0 : Math.max(0, Integer.parseInt(value));
+            String raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return raw == null ? 0 : Math.max(0, Integer.parseInt(raw));
         } catch (Exception ignored) {
             return 0;
         } finally {
@@ -784,113 +788,98 @@ public final class AudiobookService extends Service {
         }
     }
 
-    private void saveProgress(String bookId, int segment, int positionMs) {
-        progressPrefs().edit()
-                .putInt(key(bookId, "chunk"), Math.max(0, segment))
-                .putInt(key(bookId, "offset"), Math.max(0, positionMs))
-                .apply();
+    private void saveProgress(String id, int chunk, int offset) {
+        progressPrefs().edit().putInt(key(id, "chunk"), Math.max(0, chunk))
+                .putInt(key(id, "offset"), Math.max(0, offset)).apply();
     }
 
-    private void clearProgress(String bookId) {
-        progressPrefs().edit()
-                .remove(key(bookId, "chunk"))
-                .remove(key(bookId, "offset"))
-                .apply();
-    }
-
-    private int globalProgress() {
-        List<String> segments = activeSegments;
-        if (segments == null || segments.isEmpty()) return 0;
-        double fraction = activeDurationMs > 0
-                ? Math.max(0.0, Math.min(1.0, activePositionMs / (double) activeDurationMs)) : 0.0;
-        double value = (Math.min(activeSegment, segments.size() - 1) + fraction) / segments.size();
-        return clamp((int) Math.round(value * 10000.0), 0, 10000);
-    }
-
-    private String progressText() {
-        BookStore.Book book = activeBook;
-        if (book == null) return "Reading";
-        int count = activeSegments == null ? 0 : activeSegments.size();
-        if (count <= 0) return "Preparing " + book.title;
-        return profileLabel() + " • " + book.title + " • "
-                + Math.min(activeSegment + 1, count) + "/" + count;
-    }
-
-    private Notification notification(String text, boolean playing) {
-        Intent playerIntent = new Intent(this, PlayerActivity.class);
-        if (activeBook != null) playerIntent.putExtra(EXTRA_BOOK_ID, activeBook.id);
-        PendingIntent content = PendingIntent.getActivity(this, 1, playerIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        PendingIntent back = serviceAction(2, ACTION_SEEK_BACK);
-        PendingIntent toggle = serviceAction(3, ACTION_TOGGLE);
-        PendingIntent forward = serviceAction(4, ACTION_SEEK_FORWARD);
-        PendingIntent stop = serviceAction(5, ACTION_STOP);
-
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(this, CHANNEL)
-                : new Notification.Builder(this);
-        return b.setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle(activeBook == null ? "WoW Audio" : activeBook.title)
-                .setContentText(text)
-                .setContentIntent(content)
-                .setOngoing(activeBook != null)
-                .setOnlyAlertOnce(true)
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_rew, "Back 15s", back).build())
-                .addAction(new Notification.Action.Builder(
-                        playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                        playing ? "Pause" : "Resume", toggle).build())
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_ff, "Forward 15s", forward).build())
-                .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop).build())
-                .build();
-    }
-
-    private PendingIntent serviceAction(int requestCode, String action) {
-        return PendingIntent.getService(this, requestCode,
-                new Intent(this, AudiobookService.class).setAction(action),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-    }
-
-    private void updateNotification(String text, boolean playing) {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.notify(NOTIFICATION_ID, notification(text, playing));
-    }
-
-    private void createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL, "Audiobook playback", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("WoW Audio audiobook playback controls");
-            nm.createNotificationChannel(channel);
-        }
-    }
-
-    private void broadcast(String message, boolean playing) {
-        Intent state = new Intent(ACTION_STATE).setPackage(getPackageName());
-        state.putExtra(EXTRA_MESSAGE, message);
-        state.putExtra(EXTRA_PLAYING, playing && !paused);
-        BookStore.Book book = activeBook;
-        if (book != null) state.putExtra(EXTRA_BOOK_ID, book.id);
-        state.putExtra(EXTRA_PROGRESS, globalProgress());
-        state.putExtra(EXTRA_POSITION_MS, Math.max(0, activePositionMs));
-        state.putExtra(EXTRA_DURATION_MS, Math.max(0, activeDurationMs));
-        state.putExtra(EXTRA_SEGMENT_INDEX, Math.max(0, activeSegment));
-        state.putExtra(EXTRA_SEGMENT_COUNT, activeSegments == null ? 0 : activeSegments.size());
-        state.putExtra(EXTRA_TEXT, activeText == null ? "" : activeText);
-        state.putExtra(EXTRA_VOICE_LABEL, profileLabel());
-        state.putExtra(EXTRA_SPEED_LABEL, VoiceSettings.speedLabel(this));
-        state.putExtra(EXTRA_TONE_LABEL, VoiceSettings.toneLabel(this));
-        state.putExtra(EXTRA_STYLE_LABEL, VoiceSettings.readingStyleLabel(this));
-        state.putExtra(EXTRA_VOLUME_LABEL, VoiceSettings.volumeLabel(this));
-        sendBroadcast(state);
+    private void clearProgress(String id) {
+        progressPrefs().edit().remove(key(id, "chunk")).remove(key(id, "offset")).apply();
     }
 
     private SharedPreferences progressPrefs() {
         return getSharedPreferences("reading_progress", MODE_PRIVATE);
     }
 
-    private static String key(String bookId, String suffix) {
-        return bookId + ":" + suffix;
+    private static String key(String id, String suffix) {
+        return id + ":" + suffix;
+    }
+
+    private void createChannel() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "WoW Audio playback",
+                NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("Audiobook playback controls");
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) manager.createNotificationChannel(channel);
+    }
+
+    private void updateNotification(String message, boolean playing) {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_ID, notification(message, playing));
+    }
+
+    private Notification notification(String message, boolean playing) {
+        Intent open = new Intent(this, PlayerActivity.class);
+        BookStore.Book book = activeBook;
+        if (book != null) open.putExtra(EXTRA_BOOK_ID, book.id);
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 30, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent toggle = PendingIntent.getService(this, 31,
+                new Intent(this, AudiobookService.class).setAction(ACTION_TOGGLE),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent back = PendingIntent.getService(this, 32,
+                new Intent(this, AudiobookService.class).setAction(ACTION_SEEK_BACK),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent forward = PendingIntent.getService(this, 33,
+                new Intent(this, AudiobookService.class).setAction(ACTION_SEEK_FORWARD),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
+        b.setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle(book == null ? "WoW Audio" : book.title)
+                .setContentText(message)
+                .setContentIntent(contentIntent)
+                .setOngoing(playing)
+                .addAction(new Notification.Action.Builder(null, "-15s", back).build())
+                .addAction(new Notification.Action.Builder(null, playing ? "Pause" : "Play", toggle).build())
+                .addAction(new Notification.Action.Builder(null, "+15s", forward).build());
+        if (Build.VERSION.SDK_INT >= 21) b.setCategory(Notification.CATEGORY_TRANSPORT);
+        return b.build();
+    }
+
+    private void broadcast(String message, boolean playing) {
+        Intent i = new Intent(ACTION_STATE).setPackage(getPackageName());
+        BookStore.Book book = activeBook;
+        if (book != null) i.putExtra(EXTRA_BOOK_ID, book.id);
+        i.putExtra(EXTRA_MESSAGE, message);
+        i.putExtra(EXTRA_PLAYING, playing);
+        i.putExtra(EXTRA_SEGMENT_INDEX, activeSegment);
+        i.putExtra(EXTRA_SEGMENT_COUNT, activeSegments == null ? 0 : activeSegments.size());
+        i.putExtra(EXTRA_POSITION_MS, activePositionMs);
+        i.putExtra(EXTRA_DURATION_MS, activeDurationMs);
+        i.putExtra(EXTRA_TEXT, activeText);
+        i.putExtra(EXTRA_VOICE_LABEL, profileLabel());
+        i.putExtra(EXTRA_SPEED_LABEL, VoiceSettings.speedLabel(this));
+        i.putExtra(EXTRA_TONE_LABEL, VoiceSettings.toneLabel(this));
+        i.putExtra(EXTRA_STYLE_LABEL, VoiceSettings.readingStyleLabel(this));
+        i.putExtra(EXTRA_VOLUME_LABEL, VoiceSettings.volumeLabel(this));
+
+        int progress = 0;
+        List<String> segments = activeSegments;
+        if (segments != null && !segments.isEmpty()) {
+            double fraction = activeSegment / (double) segments.size();
+            if (activeDurationMs > 0) fraction += (activePositionMs / (double) activeDurationMs) / segments.size();
+            progress = clamp((int) Math.round(fraction * 10000.0), 0, 10000);
+        }
+        i.putExtra(EXTRA_PROGRESS, progress);
+        sendBroadcast(i);
+    }
+
+    private String progressText() {
+        int count = activeSegments == null ? 0 : activeSegments.size();
+        return count <= 0 ? "Ready" : "Part " + Math.min(activeSegment + 1, count) + "/" + count;
     }
 
     private static int clamp(int value, int min, int max) {
