@@ -28,8 +28,15 @@ final class TtsText {
             int limit = Math.min(length, start + max);
             int end = findBreak(normalized, start, limit, first ? 42 : 80);
             if (end <= start) end = limit;
-            String chunk = clean(normalized.substring(start, end));
+
+            String rawChunk = normalized.substring(start, end);
+            boolean structuralBreak = rawChunk.indexOf('\n') >= 0;
+            String chunk = clean(rawChunk);
             if (!chunk.isEmpty() && containsMyanmar(chunk)) {
+                // Preserve an invisible structural cue for the playback prosody layer. The Edge
+                // client trims it before synthesis, so it is never spoken, but it lets the service
+                // distinguish a heading/paragraph boundary from an ordinary text split.
+                if (structuralBreak) chunk = chunk + "\n";
                 out.add(chunk);
                 first = false;
             }
@@ -70,11 +77,10 @@ final class TtsText {
     }
 
     private static int findBreak(String text, int start, int limit, int minChars) {
-        if (limit >= text.length()) return text.length();
+        if (start >= limit) return limit;
         int floor = Math.min(limit - 1, start + Math.max(18, minChars));
 
-        // Structural newlines must not be swallowed by a later punctuation search. A heading or
-        // line-ending before a full stop is a real reading boundary and should become a pause.
+        // Structural newlines are hard reading boundaries, even for a short heading.
         for (int i = start; i + 1 < limit; i++) {
             if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
         }
@@ -82,8 +88,9 @@ final class TtsText {
             if (text.charAt(i) == '\n') return i + 1;
         }
 
-        // Full Burmese sentence endings are hard boundaries. Do not require a minimum chunk size:
-        // a short sentence must still stop at '။' rather than run into the next sentence.
+        // Full Burmese sentence endings are hard boundaries. A short sentence must still stop at
+        // '။' rather than run into the next sentence, including when the whole remaining text is
+        // shorter than the nominal chunk size.
         for (int i = start; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '။' || c == '!' || c == '?' || c == '…') return includeClosingQuotes(text, i + 1, limit);
@@ -95,6 +102,10 @@ final class TtsText {
             char c = text.charAt(i);
             if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
+
+        // If the rest of the text already fits, keep it as the final segment after checking every
+        // meaningful boundary above.
+        if (limit >= text.length()) return text.length();
 
         // Only arbitrary whitespace splitting keeps the minimum-length guard.
         for (int i = limit - 1; i >= floor; i--) {
