@@ -1,4 +1,4 @@
-name: Build WoW Audio v1.8.1 voice + pause fixes
+name: Build WoW Audio v1.9.0 Aung Gyi local voice
 
 on:
   push:
@@ -40,7 +40,6 @@ jobs:
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check --quiet "sherpa-onnx==1.13.7"
           python3 - <<'PY'
-          import math
           import sherpa_onnx
           model = "app/src/main/assets/tts/mya/model.onnx"
           tokens = "app/src/main/assets/tts/mya/tokens.txt"
@@ -70,18 +69,21 @@ jobs:
           test "$(stat -c%s /tmp/nilar.mp3)" -gt 3000
           test "$(stat -c%s /tmp/thiha.mp3)" -gt 3000
 
-      - name: Verify v1.8.1 audiobook contract
+      - name: Verify v1.9.0 audiobook contract
         shell: bash
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
-          grep -q "versionCode 14" app/build.gradle
-          grep -q "versionName '1.8.1'" app/build.gradle
+          grep -q "versionCode 15" app/build.gradle
+          grep -q "versionName '1.9.0'" app/build.gradle
           grep -q 'burmese-prosody-v4-pause-boundaries' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
           grep -q 'Pause clearly at Burmese full stops' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
           grep -q 'Structural newlines must not be swallowed' app/src/main/java/com/whisper/wowaudio/TtsText.java
           grep -q 'Never cross-read a different Edge voice' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
           grep -q 'STYLE_GEMINI_EXPRESSIVE' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'ENGINE_F5' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'F5LocalTtsEngine' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
+          grep -q 'onnxruntime-android:1.23.2' app/build.gradle
           grep -q 'VIEW_SMALL_LIST' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'VIEW_SMALL_GRID' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
@@ -105,13 +107,14 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
-          "$AAPT" dump badging "$APK" | grep -q "versionCode='14'"
-          "$AAPT" dump badging "$APK" | grep -q "versionName='1.8.1'"
+          "$AAPT" dump badging "$APK" | grep -q "versionCode='15'"
+          "$AAPT" dump badging "$APK" | grep -q "versionName='1.9.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
           unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
           unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libonnxruntime.so'
           ls -lh "$APK"
 
       - name: Export apksigner utility for local private-key signing
@@ -144,33 +147,33 @@ jobs:
         run: |
           set -euo pipefail
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
-          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.8.1-UPDATE-signed.apk
+          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" sign --ks /tmp/WoW-Audio-update-key.jks --ks-key-alias "$WOW_AUDIO_KEY_ALIAS" --ks-pass env:WOW_AUDIO_STORE_PASSWORD --key-pass env:WOW_AUDIO_KEY_PASSWORD --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$SIGNED" "$UNSIGNED"
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee /tmp/apksigner.txt
           grep -qi '5f58ab463c3a43275dd768fb3bdb2aaef388b5c18a4d6076b0c5339b4aee0fe1' /tmp/apksigner.txt
 
-      - name: Upload v1.8.1 update-install signed APK
+      - name: Upload v1.9.0 update-install signed APK
         if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.8.1-UPDATE-signed
-          path: app/build/outputs/apk/release/WoW-Audio-v1.8.1-UPDATE-signed.apk
+          name: WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed
+          path: app/build/outputs/apk/release/WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed.apk
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload v1.8.1 test APK
+      - name: Upload v1.9.0 test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.8.1-voice-pause-test
+          name: WoW-Audio-v1.9.0-Aung-Gyi-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
 
-      - name: Upload v1.8.1 unsigned release
+      - name: Upload v1.9.0 unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.8.1-release-unsigned
+          name: WoW-Audio-v1.9.0-Aung-Gyi-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
