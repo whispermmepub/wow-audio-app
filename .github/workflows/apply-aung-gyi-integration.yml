@@ -1,0 +1,51 @@
+name: Apply Aung Gyi Integration
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - 'tools/apply_aung_gyi_integration.py'
+      - '.github/workflows/apply-aung-gyi-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/v1.9.0-aung-gyi-f5-local
+          fetch-depth: 0
+
+      - name: Apply integration patch
+        run: python3 tools/apply_aung_gyi_integration.py
+
+      - name: Verify patched source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "versionCode 15" app/build.gradle
+          grep -q "versionName '1.9.0'" app/build.gradle
+          grep -q 'ENGINE_F5' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'Generating အောင်ကြီး locally' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
+          grep -q 'Import Model ZIP' app/src/main/java/com/whisper/wowaudio/SettingsActivity.java
+          git diff --check
+
+      - name: Commit integrated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No source changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle app/src/main/java/com/whisper/wowaudio/VoiceSettings.java app/src/main/java/com/whisper/wowaudio/AudioCache.java app/src/main/java/com/whisper/wowaudio/SettingsActivity.java app/src/main/java/com/whisper/wowaudio/AudiobookService.java .github/workflows/build.yml
+          git commit -m 'Integrate Aung Gyi local F5 voice v1.9.0'
+          git push origin HEAD:feature/v1.9.0-aung-gyi-f5-local
