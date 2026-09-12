@@ -14,6 +14,7 @@ public final class TtsTextTest {
         assertTrue(cleaned.contains("ပထမစာကြောင်း"));
         assertTrue(cleaned.contains("ဒုတိယစာကြောင်း"));
         assertTrue(cleaned.contains("တတိယစာကြောင်း"));
+        assertTrue(cleaned.contains("\n"));
         assertFalse(cleaned.matches("(?s).*\\bn(?:\\s+n)+\\b.*"));
 
         List<String> chunks = TtsText.chunks(input);
@@ -54,5 +55,20 @@ public final class TtsTextTest {
             }
         }
         assertTrue(foundDialogue);
+    }
+
+    @Test public void lineBreakSeparatesHeadingFromBody() {
+        String input = "အခန်း (၁)\nဒါက စာကိုယ်ရဲ့ ပထမစာကြောင်း ဖြစ်ပါတယ်။ နောက်ထပ် စာကြောင်းလည်း ရှိပါတယ်။";
+        List<String> chunks = TtsText.chunks(input);
+        assertTrue(chunks.size() >= 2);
+        assertTrue(chunks.get(0).contains("အခန်း (၁)"));
+        assertFalse(chunks.get(0).contains("ပထမစာကြောင်း"));
+    }
+
+    @Test public void burmeseFullStopAndCommaCreateNaturalBoundaries() {
+        String input = "သူ ပြန်လာခဲ့သည်။ နောက်တစ်ကြောင်းကို ဆက်ဖတ်မည်၊ ပြီးတော့ နောက်ဆုံးစာကို ဆက်မည်။";
+        List<String> chunks = TtsText.chunks(input);
+        assertTrue(chunks.size() >= 2);
+        assertTrue(chunks.get(0).endsWith("။"));
     }
 }
