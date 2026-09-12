@@ -74,6 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
+          grep -q "minSdk 24" app/build.gradle
           grep -q "versionCode 15" app/build.gradle
           grep -q "versionName '1.9.0'" app/build.gradle
           grep -q 'burmese-prosody-v4-pause-boundaries' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
@@ -109,7 +110,7 @@ jobs:
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
           "$AAPT" dump badging "$APK" | grep -q "versionCode='15'"
           "$AAPT" dump badging "$APK" | grep -q "versionName='1.9.0'"
-          "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
+          "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'24'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
           unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
           unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
