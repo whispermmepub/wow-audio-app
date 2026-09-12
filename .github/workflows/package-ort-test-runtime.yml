@@ -1,0 +1,31 @@
+name: Package local ORT test runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/package-ort-test-runtime.yml'
+
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download CPython 3.13 CPU inference wheels
+        run: |
+          mkdir -p /tmp/wheels
+          python -m pip download --only-binary=:all: --dest /tmp/wheels \
+            onnxruntime==1.23.2 coloredlogs flatbuffers humanfriendly
+          ls -lh /tmp/wheels
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: ORT-Python313-local-test-wheels
+          path: /tmp/wheels/
+          retention-days: 1
