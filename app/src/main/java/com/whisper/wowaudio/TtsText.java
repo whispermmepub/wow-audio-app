@@ -80,7 +80,8 @@ final class TtsText {
         if (start >= limit) return limit;
         int floor = Math.min(limit - 1, start + Math.max(18, minChars));
 
-        // Structural newlines are hard reading boundaries, even for a short heading.
+        // Structural newlines must not be swallowed. They are hard reading boundaries, even for
+        // a short heading, so heading/body text cannot run together.
         for (int i = start; i + 1 < limit; i++) {
             if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
         }
