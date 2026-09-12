@@ -35,18 +35,22 @@ final class BurmeseProsody {
     }
 
     static Profile analyze(String text, String readingStyle) {
-        String s = text == null ? "" : text.trim();
-        if (s.isEmpty()) return neutral();
+        String raw = text == null ? "" : text;
+        boolean structuralBreak = hasStructuralLineBreak(raw);
+        String s = raw.trim();
+        if (s.isEmpty()) return structuralBreak
+                ? new Profile(0.99f, 0.99f, 0, 320, "Line Break")
+                : neutral();
 
         boolean geminiLike = VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(readingStyle);
         float intensity = styleIntensity(readingStyle);
         float baseSpeed = 1.0f;
         float basePitch = 1.0f;
-        int basePause = boundaryPause(s);
+        int basePause = boundaryPause(raw);
 
         if (VoiceSettings.STYLE_NORMAL.equals(readingStyle)) {
             intensity = 0.0f;
-        } else if (VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(readingStyle)) {
+        } else if (geminiLike) {
             baseSpeed = 0.994f;
             basePause += 10;
         } else if (VoiceSettings.STYLE_CALM.equals(readingStyle)) {
@@ -68,7 +72,7 @@ final class BurmeseProsody {
         boolean exclamation = s.indexOf('!') >= 0;
         boolean dialogue = looksLikeDialogue(s);
         boolean ellipsis = hasEllipsis(s);
-        boolean paragraph = hasStructuralLineBreak(s);
+        boolean paragraph = structuralBreak;
         boolean quotedQuestion = dialogue && question;
         boolean sentenceEnd = endsWithFullStop(s);
         boolean phraseEnd = endsWithPhrasePause(s);
@@ -158,9 +162,6 @@ final class BurmeseProsody {
             if ("Natural".equals(label)) label = "Dialogue";
         }
 
-        // Burmese reading cadence: a full stop gets a settled, slightly lower landing before a
-        // clearly audible pause. Phrase comma gets a smaller breath. Structural line breaks get
-        // the longest pause so headings and body text do not run together.
         if (sentenceEnd && !question && !exclamation && !ellipsis) {
             speedDelta -= 0.010f;
             pitchDelta -= 0.012f;
@@ -204,8 +205,6 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        // Punctuation and structural pauses are reading grammar, not just an optional style. Keep
-        // a useful minimum even in Normal mode while leaving emotional modulation style-dependent.
         if (sentenceEnd) expressivePause = Math.max(expressivePause, 190);
         if (phraseEnd) expressivePause = Math.max(expressivePause, 115);
         if (paragraph) expressivePause = Math.max(expressivePause, 320);
@@ -256,9 +255,9 @@ final class BurmeseProsody {
                 + cue + " Preserve every written word exactly.";
     }
 
-    private static int boundaryPause(String s) {
-        String value = stripClosingQuotes(s.trim());
-        if (hasStructuralLineBreak(s)) return 320;
+    private static int boundaryPause(String raw) {
+        if (hasStructuralLineBreak(raw)) return 320;
+        String value = stripClosingQuotes(raw.trim());
         if (hasEllipsis(value)) return 205;
         if (value.endsWith("?") || value.endsWith("!")) return 175;
         if (value.endsWith("။") || value.endsWith(".")) return 190;
@@ -277,7 +276,7 @@ final class BurmeseProsody {
     }
 
     private static boolean hasStructuralLineBreak(String s) {
-        return s.indexOf('\n') >= 0;
+        return s != null && s.indexOf('\n') >= 0;
     }
 
     private static boolean isQuestion(String s) {
