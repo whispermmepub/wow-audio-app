@@ -45,6 +45,7 @@ dependencies {
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.7.20'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation files('libs/sherpa-onnx-1.13.7.aar')
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2'
+    // One shared ONNX Runtime for both Sherpa offline backup and F5 custom voice.
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.29.0'
     testImplementation 'junit:junit:4.13.2'
 }
