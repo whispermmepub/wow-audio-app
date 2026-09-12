@@ -46,8 +46,8 @@ public final class BurmeseProsodyTest {
         BurmeseProsody.Profile expressive = BurmeseProsody.analyze(text, VoiceSettings.STYLE_GEMINI_EXPRESSIVE);
         assertTrue(Math.abs(expressive.pitchMultiplier - 1.0f) >= Math.abs(auto.pitchMultiplier - 1.0f));
         assertTrue(expressive.gainMb >= auto.gainMb);
-        assertTrue(expressive.pitchMultiplier >= 0.94f && expressive.pitchMultiplier <= 1.07f);
-        assertTrue(expressive.speedMultiplier >= 0.91f && expressive.speedMultiplier <= 1.08f);
+        assertTrue(expressive.pitchMultiplier >= 0.925f && expressive.pitchMultiplier <= 1.07f);
+        assertTrue(expressive.speedMultiplier >= 0.90f && expressive.speedMultiplier <= 1.08f);
     }
 
     @Test public void normalStyleKeepsMoodChangesSubtle() {
@@ -57,9 +57,23 @@ public final class BurmeseProsodyTest {
         assertEquals(1.0f, p.pitchMultiplier, 0.0001f);
     }
 
+    @Test public void fullStopGetsSettledLowerEndingAndPause() {
+        BurmeseProsody.Profile p = BurmeseProsody.analyze("သူ ပြန်လာခဲ့သည်။", VoiceSettings.STYLE_GEMINI_EXPRESSIVE);
+        assertTrue(p.pitchMultiplier < 1.0f);
+        assertTrue(p.speedMultiplier < 1.0f);
+        assertTrue(p.pauseAfterMs >= 190);
+    }
+
+    @Test public void structuralLineBreakGetsLongPause() {
+        BurmeseProsody.Profile p = BurmeseProsody.analyze("အခန်း (၁)\n", VoiceSettings.STYLE_GEMINI_EXPRESSIVE);
+        assertTrue(p.pauseAfterMs >= 320);
+        assertTrue(p.pitchMultiplier <= 1.0f);
+    }
+
     @Test public void geminiDirectionIncludesPassageAwareGuidance() {
         String direction = BurmeseProsody.geminiDirection("သူမ မျက်ရည်ကျပြီး ဝမ်းနည်းနေသည်။");
         assertTrue(direction.contains("gentle") || direction.contains("emotionally restrained"));
+        assertTrue(direction.contains("Pause clearly at Burmese full stops"));
         assertTrue(direction.contains("Preserve every written word exactly"));
     }
 }
