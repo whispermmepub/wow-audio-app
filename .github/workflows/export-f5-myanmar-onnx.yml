@@ -35,14 +35,8 @@ jobs:
         run: |
           python - <<'PY'
           from huggingface_hub import snapshot_download
-          snapshot_download(
-              repo_id='freococo/F5-Myanmar-TTS',
-              local_dir='/tmp/f5-myanmar',
-          )
-          snapshot_download(
-              repo_id='charactr/vocos-mel-24khz',
-              local_dir='/tmp/vocos-mel-24khz',
-          )
+          snapshot_download(repo_id='freococo/F5-Myanmar-TTS', local_dir='/tmp/f5-myanmar')
+          snapshot_download(repo_id='charactr/vocos-mel-24khz', local_dir='/tmp/vocos-mel-24khz')
           PY
 
       - name: Locate custom checkpoint and vocabulary
@@ -54,18 +48,14 @@ jobs:
           VOCAB="$(find /tmp/f5-myanmar -type f \( -iname 'vocab.txt' -o -iname 'vocab_*.txt' -o -iname 'vocab*.txt' \) | head -n1)"
           if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
             echo 'No F5 Myanmar safetensors checkpoint found.' >&2
-            find /tmp/f5-myanmar -maxdepth 3 -type f | sort >&2
             exit 1
           fi
           if [ -z "$VOCAB" ] || [ ! -f "$VOCAB" ]; then
             echo 'No F5 Myanmar vocabulary found.' >&2
-            find /tmp/f5-myanmar -maxdepth 3 -type f | sort >&2
             exit 1
           fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "vocab=$VOCAB" >> "$GITHUB_OUTPUT"
-          echo "Checkpoint: $MODEL"
-          echo "Vocabulary: $VOCAB"
           ls -lh "$MODEL" "$VOCAB"
 
       - name: Validate F5 custom checkpoint against exporter
@@ -94,7 +84,7 @@ jobs:
             --decoder-output-type f32 \
             --skip-inference
 
-      - name: Assemble private-install model pack
+      - name: Assemble and split verification pack
         run: |
           set -euo pipefail
           cp '${{ steps.files.outputs.vocab }}' /tmp/aung-gyi-f5-onnx/vocab.txt
@@ -106,15 +96,54 @@ jobs:
           Sample rate: 24000 Hz
 
           This pack intentionally does NOT contain a user's private reference voice.
-          Install the user-authorized Aung Gyi reference WAV separately in app-private storage.
           EOF
-          (cd /tmp/aung-gyi-f5-onnx && sha256sum * > SHA256SUMS.txt)
-          ls -lh /tmp/aung-gyi-f5-onnx
+          (cd /tmp/aung-gyi-f5-onnx && sha256sum F5_Preprocess.onnx F5_Transformer.onnx F5_Decode.onnx F5_Metadata.onnx vocab.txt > SHA256SUMS.txt)
+          mkdir -p /tmp/f5-small /tmp/f5-transformer-parts
+          cp /tmp/aung-gyi-f5-onnx/F5_Preprocess.onnx /tmp/f5-small/
+          cp /tmp/aung-gyi-f5-onnx/F5_Decode.onnx /tmp/f5-small/
+          cp /tmp/aung-gyi-f5-onnx/F5_Metadata.onnx /tmp/f5-small/
+          cp /tmp/aung-gyi-f5-onnx/vocab.txt /tmp/f5-small/
+          cp /tmp/aung-gyi-f5-onnx/README.txt /tmp/f5-small/
+          cp /tmp/aung-gyi-f5-onnx/SHA256SUMS.txt /tmp/f5-small/
+          split -b 180M -d -a 2 /tmp/aung-gyi-f5-onnx/F5_Transformer.onnx /tmp/f5-transformer-parts/F5_Transformer.onnx.part-
+          ls -lh /tmp/f5-small /tmp/f5-transformer-parts
 
-      - name: Upload ONNX model pack
+      - name: Upload small ONNX files
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-F5-Myanmar-ONNX-NONCOMMERCIAL
-          path: /tmp/aung-gyi-f5-onnx/
+          name: F5-Myanmar-ONNX-small
+          path: /tmp/f5-small/
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload Transformer part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-00
+          path: /tmp/f5-transformer-parts/F5_Transformer.onnx.part-00
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload Transformer part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-01
+          path: /tmp/f5-transformer-parts/F5_Transformer.onnx.part-01
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload Transformer part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-02
+          path: /tmp/f5-transformer-parts/F5_Transformer.onnx.part-02
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload Transformer part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-03
+          path: /tmp/f5-transformer-parts/F5_Transformer.onnx.part-03
           retention-days: 7
           compression-level: 0
