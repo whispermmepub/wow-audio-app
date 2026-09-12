@@ -16,6 +16,12 @@ final class AudioCache {
         return SpeechCache.offline(book, index, speed, text);
     }
 
+    static File f5(BookStore.Book book, int index, String text) {
+        File dir = new File(book.directory, "speech-cache/f5/" + F5MyanmarVoicePack.VOICE_ID_AUNG_GYI);
+        String signature = sha256(F5MyanmarVoicePack.RUNTIME_VERSION + "\n" + text);
+        return new File(dir, String.format(Locale.US, "%05d-%s.wav", index, signature.substring(0, 16)));
+    }
+
     static File gemini(BookStore.Book book, int index, String model, String voice,
                        String style, String text) {
         String profile = safe(model) + "__" + safe(voice);
@@ -27,7 +33,10 @@ final class AudioCache {
     static File existing(BookStore.Book book, int index, String engine, String edgeVoice,
                          String geminiModel, String geminiVoice, String geminiStyle,
                          float speed, String text) {
-        if (VoiceSettings.ENGINE_GEMINI.equals(engine)) {
+        if (VoiceSettings.ENGINE_F5.equals(engine)) {
+            File f = f5(book, index, text);
+            if (f.isFile() && f.length() > 44) return f;
+        } else if (VoiceSettings.ENGINE_GEMINI.equals(engine)) {
             File f = gemini(book, index, geminiModel, geminiVoice, geminiStyle, text);
             if (f.isFile() && f.length() > 44) return f;
         } else if (VoiceSettings.ENGINE_OFFLINE.equals(engine)) {

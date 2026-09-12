@@ -2,6 +2,8 @@ package com.whisper.wowaudio;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -32,11 +34,14 @@ public final class SettingsActivity extends Activity {
     private static final int INK = Color.rgb(23, 36, 64);
     private static final int MUTED = Color.rgb(91, 105, 132);
     private static final int PAGE = Color.rgb(246, 248, 253);
+    private static final int REQ_F5_MODEL = 4101;
+    private static final int REQ_F5_REFERENCE = 4102;
 
     private RadioGroup engineGroup;
     private RadioButton edgeEngine;
     private RadioButton geminiEngine;
     private RadioButton offlineEngine;
+    private RadioButton f5Engine;
     private RadioGroup edgeVoiceGroup;
     private RadioButton nilarVoice;
     private RadioButton thihaVoice;
@@ -45,6 +50,7 @@ public final class SettingsActivity extends Activity {
     private EditText geminiStyle;
     private EditText apiKey;
     private TextView keyStatus;
+    private TextView f5Status;
     private Button previewButton;
     private MediaPlayer previewPlayer;
 
@@ -95,9 +101,11 @@ public final class SettingsActivity extends Activity {
         edgeEngine = radio("WoW Natural • Nilar / Thiha");
         geminiEngine = radio("Google Gemini TTS • your API key");
         offlineEngine = radio("Offline Burmese backup");
+        f5Engine = radio("အောင်ကြီး • Local Custom Voice");
         engineGroup.addView(edgeEngine);
         engineGroup.addView(geminiEngine);
         engineGroup.addView(offlineEngine);
+        engineGroup.addView(f5Engine);
         root.addView(engineGroup, marginTop(8));
 
         root.addView(section("WoW Natural Voice"), marginTop(20));
@@ -109,6 +117,22 @@ public final class SettingsActivity extends Activity {
         edgeVoiceGroup.addView(thihaVoice, new RadioGroup.LayoutParams(0, -2, 1f));
         root.addView(edgeVoiceGroup, marginTop(8));
         root.addView(body("Nilar / Thiha က API key မလိုပါ။ စာအုပ်စာသားကို အသံမထွက်ခင် သန့်စင်ပြီး မြန်မာစာ ဝါကျဖြတ်ပုံနဲ့ pause ကို ပိုသဘာဝကျအောင် ချိန်ထားပါတယ်။ Generate ပြီးသားအသံကို စာအုပ်အလိုက် cache သိမ်းထားပါတယ်။"), marginTop(6));
+
+        root.addView(section("Local Custom Voice • အောင်ကြီး"), marginTop(22));
+        f5Status = body("");
+        root.addView(f5Status, marginTop(5));
+        LinearLayout f5Actions = new LinearLayout(this);
+        f5Actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button importModel = secondary("Import Model ZIP");
+        importModel.setOnClickListener(v -> pickF5Model());
+        f5Actions.addView(importModel, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        Button importVoice = secondary("Import Voice WAV");
+        importVoice.setOnClickListener(v -> pickF5Reference());
+        LinearLayout.LayoutParams f5vp = new LinearLayout.LayoutParams(0, dp(56), 1f);
+        f5vp.leftMargin = dp(8);
+        f5Actions.addView(importVoice, f5vp);
+        root.addView(f5Actions, marginTop(10));
+        root.addView(body("အောင်ကြီးက server/API မလိုဘဲ ဖုန်းထဲမှာပဲ ONNX Runtime နဲ့ အသံထုတ်ပါတယ်။ ပထမတစ်ကြိမ် Q4 model ZIP နဲ့ ကိုယ်ပိုင်/ခွင့်ပြုထားတဲ့ reference WAV ကို import လုပ်ရပါမယ်။ Model နဲ့ voice sample ကို app-private storage ထဲသာ သိမ်းပါတယ်။"), marginTop(8));
 
         root.addView(section("Gemini Natural Voice"), marginTop(22));
         keyStatus = body("");
@@ -158,6 +182,7 @@ public final class SettingsActivity extends Activity {
     private void load() {
         String engine = VoiceSettings.engine(this);
         if (VoiceSettings.ENGINE_GEMINI.equals(engine)) geminiEngine.setChecked(true);
+        else if (VoiceSettings.ENGINE_F5.equals(engine)) f5Engine.setChecked(true);
         else if (VoiceSettings.ENGINE_OFFLINE.equals(engine)) offlineEngine.setChecked(true);
         else edgeEngine.setChecked(true);
 
@@ -176,14 +201,20 @@ public final class SettingsActivity extends Activity {
         boolean has = SecureApiKeyStore.hasGeminiKey(this);
         keyStatus.setText(has ? "Gemini API key: saved securely" : "Gemini API key: not set");
         apiKey.setHint(has ? "Leave blank to keep saved key" : "Paste API key here");
+        updateF5Status();
     }
 
     private void save() {
         try {
             String engine;
             if (geminiEngine.isChecked()) engine = VoiceSettings.ENGINE_GEMINI;
+            else if (f5Engine.isChecked()) engine = VoiceSettings.ENGINE_F5;
             else if (offlineEngine.isChecked()) engine = VoiceSettings.ENGINE_OFFLINE;
             else engine = VoiceSettings.ENGINE_EDGE;
+            if (VoiceSettings.ENGINE_F5.equals(engine) && !F5MyanmarVoicePack.isInstalled(this)) {
+                showMessage("အောင်ကြီး voice မပြည့်စုံသေးပါ", "Model ZIP နဲ့ reference WAV နှစ်ခုလုံးကို အရင် import လုပ်ပါ။\n\n" + F5MyanmarVoicePack.status(this));
+                return;
+            }
             VoiceSettings.setEngine(this, engine);
             VoiceSettings.setEdgeVoice(this,
                     thihaVoice.isChecked() ? EdgeMyanmarTtsClient.VOICE_THIHA : EdgeMyanmarTtsClient.VOICE_NILAR);
@@ -205,6 +236,47 @@ public final class SettingsActivity extends Activity {
         } catch (Exception e) {
             showError("Could not save settings", e);
         }
+    }
+
+    private void pickF5Model() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        startActivityForResult(i, REQ_F5_MODEL);
+    }
+
+    private void pickF5Reference() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("audio/*");
+        startActivityForResult(i, REQ_F5_REFERENCE);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (requestCode != REQ_F5_MODEL && requestCode != REQ_F5_REFERENCE) return;
+        Toast.makeText(this, requestCode == REQ_F5_MODEL ? "Importing local voice model…" : "Importing private voice sample…", Toast.LENGTH_SHORT).show();
+        previewExecutor.submit(() -> {
+            try {
+                if (requestCode == REQ_F5_MODEL) F5MyanmarVoicePack.installModelZip(this, uri);
+                else F5MyanmarVoicePack.installReferenceWav(this, uri);
+                runIfActive(() -> {
+                    updateF5Status();
+                    Toast.makeText(this, requestCode == REQ_F5_MODEL ? "Model installed" : "Voice sample installed", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Throwable e) {
+                runIfActive(() -> {
+                    updateF5Status();
+                    showError("Could not import အောင်ကြီး voice", e);
+                });
+            }
+        });
+    }
+
+    private void updateF5Status() {
+        if (f5Status != null) f5Status.setText(F5MyanmarVoicePack.status(this));
     }
 
     private void clearKey() {

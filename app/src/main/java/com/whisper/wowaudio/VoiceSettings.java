@@ -8,6 +8,7 @@ final class VoiceSettings {
     static final String ENGINE_EDGE = "edge";
     static final String ENGINE_GEMINI = "gemini";
     static final String ENGINE_OFFLINE = "offline";
+    static final String ENGINE_F5 = "f5_myanmar";
 
     static final String DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-tts-preview";
     static final String DEFAULT_GEMINI_VOICE = "Achernar";
@@ -51,12 +52,12 @@ final class VoiceSettings {
 
     static String engine(Context context) {
         String value = prefs(context).getString("engine", ENGINE_EDGE);
-        if (ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value)) return value;
+        if (ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) || ENGINE_F5.equals(value)) return value;
         return ENGINE_EDGE;
     }
 
     static void setEngine(Context context, String value) {
-        String safe = ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) ? value : ENGINE_EDGE;
+        String safe = ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) || ENGINE_F5.equals(value) ? value : ENGINE_EDGE;
         prefs(context).edit().putString("engine", safe).apply();
     }
 
@@ -263,6 +264,7 @@ final class VoiceSettings {
     static String engineLabel(Context context) {
         String engine = engine(context);
         if (ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice(context);
+        if (ENGINE_F5.equals(engine)) return F5MyanmarVoicePack.DISPLAY_NAME_AUNG_GYI + " • Local";
         if (ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
         String edge = EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice(context)) ? "Thiha" : "Nilar";
         if (STYLE_GEMINI_EXPRESSIVE.equals(readingStyle(context))) return edge + " • Gemini-like";

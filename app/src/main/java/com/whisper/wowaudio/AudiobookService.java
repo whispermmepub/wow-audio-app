@@ -88,6 +88,7 @@ public final class AudiobookService extends Service {
     private EdgeMyanmarTtsClient edgeTts;
     private GeminiTtsClient geminiTts;
     private MmsMyanmarTtsEngine offlineTts;
+    private F5LocalTtsEngine f5Tts;
 
     private static final class Profile {
         final String engine;
@@ -109,6 +110,7 @@ public final class AudiobookService extends Service {
 
         String label() {
             if (VoiceSettings.ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice;
+            if (VoiceSettings.ENGINE_F5.equals(engine)) return F5MyanmarVoicePack.DISPLAY_NAME_AUNG_GYI + " • Local";
             if (VoiceSettings.ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
             return EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice) ? "Thiha" : "Nilar";
         }
@@ -187,6 +189,10 @@ public final class AudiobookService extends Service {
             if (offlineTts != null) {
                 try { offlineTts.close(); } catch (Throwable ignored) { }
                 offlineTts = null;
+            }
+            if (f5Tts != null) {
+                try { f5Tts.close(); } catch (Throwable ignored) { }
+                f5Tts = null;
             }
         }
         super.onDestroy();
@@ -313,6 +319,25 @@ public final class AudiobookService extends Service {
 
             Throwable primaryFailure = null;
 
+            if (VoiceSettings.ENGINE_F5.equals(profile.engine)) {
+                if (!F5MyanmarVoicePack.isInstalled(this)) {
+                    throw new IllegalStateException("အောင်ကြီး voice needs the Q4 model ZIP and private reference WAV. Open Settings to import them.");
+                }
+                File local = AudioCache.f5(book, index, text);
+                if (local.isFile() && local.length() > 44) return local;
+                if (allowFallback) {
+                    broadcast("Generating အောင်ကြီး locally…", false);
+                    updateNotification("Local voice • အောင်ကြီး…", false);
+                }
+                AudioCache.ensureParent(local);
+                F5LocalTtsEngine.Audio generated = f5Engine().synthesize(this, text);
+                if (generated == null || generated.samples == null || generated.samples.length == 0) {
+                    throw new IllegalStateException("အောင်ကြီး local voice produced no audio.");
+                }
+                WavFile.writeMonoPcm16(local, generated.samples, generated.sampleRate);
+                return local;
+            }
+
             if (VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) {
                 String apiKey = SecureApiKeyStore.getGeminiKey(this);
                 if (!apiKey.isEmpty() && System.currentTimeMillis() >= geminiRetryAfterMs) {
@@ -374,6 +399,13 @@ public final class AudiobookService extends Service {
         }
     }
 
+    private F5LocalTtsEngine f5Engine() throws Exception {
+        synchronized (synthesisLock) {
+            if (f5Tts == null) f5Tts = new F5LocalTtsEngine(this);
+            return f5Tts;
+        }
+    }
+
     private MmsMyanmarTtsEngine offlineEngine() {
         synchronized (synthesisLock) {
             if (offlineTts == null) offlineTts = new MmsMyanmarTtsEngine(this);
@@ -385,7 +417,7 @@ public final class AudiobookService extends Service {
                                   Profile profile, long token) {
         Future<?> previous = prefetchFuture;
         if (previous != null && !previous.isDone()) return;
-        final int count = VoiceSettings.ENGINE_GEMINI.equals(profile.engine) ? 1 : 3;
+        final int count = (VoiceSettings.ENGINE_GEMINI.equals(profile.engine) || VoiceSettings.ENGINE_F5.equals(profile.engine)) ? 1 : 3;
         prefetchFuture = prefetchExecutor.submit(() -> {
             for (int i = current + 1; i <= current + count && i < segments.size(); i++) {
                 if (token != sessionToken || Thread.currentThread().isInterrupted()) return;
@@ -667,6 +699,7 @@ public final class AudiobookService extends Service {
         File f = AudioCache.existing(book, index, profile.engine, profile.edgeVoice,
                 profile.geminiModel, profile.geminiVoice, profile.geminiStyle, profile.speed, text);
         if (f != null) return f;
+        if (VoiceSettings.ENGINE_F5.equals(profile.engine)) return null;
         if (VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) {
             File edge = AudioCache.edge(book, index, profile.edgeVoice, profile.speed, text);
             if (edge.isFile() && edge.length() > 1024) return edge;
