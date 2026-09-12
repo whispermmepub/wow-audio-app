@@ -7,6 +7,7 @@ MODEL_DIR="$ROOT/app/src/main/assets/tts/mya"
 mkdir -p "$AAR_DIR" "$MODEL_DIR"
 
 SHERPA_VERSION="1.13.7"
+SHERPA_UPSTREAM_AAR="$AAR_DIR/sherpa-onnx-${SHERPA_VERSION}-upstream.aar"
 SHERPA_AAR="$AAR_DIR/sherpa-onnx-${SHERPA_VERSION}.aar"
 SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-${SHERPA_VERSION}.aar"
 SHERPA_SHA256="c4ef49e309f24fcee5c106b8a279481aaecaabb078cd37b2cd6e9a62cc8a73c8"
@@ -38,8 +39,44 @@ fetch() {
   mv "$out.tmp" "$out"
 }
 
-fetch "$SHERPA_URL" "$SHERPA_AAR" 40000000
-echo "$SHERPA_SHA256  $SHERPA_AAR" | sha256sum -c -
+# Sherpa and F5 both use ONNX Runtime. Sherpa v1.13.7 was built against the ORT 1.27 line,
+# but its AAR bundles a second libonnxruntime.so. Keep Sherpa's JNI and Java classes while
+# removing only that duplicate runtime so the app has one modern ORT shared library supplied
+# by the Maven onnxruntime-android dependency used by F5LocalTtsEngine.
+fetch "$SHERPA_URL" "$SHERPA_UPSTREAM_AAR" 40000000
+echo "$SHERPA_SHA256  $SHERPA_UPSTREAM_AAR" | sha256sum -c -
+python3 - "$SHERPA_UPSTREAM_AAR" "$SHERPA_AAR" <<'PY'
+import os
+import sys
+import zipfile
+
+src, dst = sys.argv[1:3]
+tmp = dst + '.tmp'
+with zipfile.ZipFile(src, 'r') as zin, zipfile.ZipFile(tmp, 'w') as zout:
+    removed = []
+    kept_sherpa_jni = []
+    for info in zin.infolist():
+        normalized = info.filename.replace('\\', '/')
+        if normalized.endswith('/libonnxruntime.so') or normalized == 'libonnxruntime.so':
+            removed.append(normalized)
+            continue
+        data = zin.read(info.filename)
+        zout.writestr(info, data)
+        if normalized.endswith('/libsherpa-onnx-jni.so'):
+            kept_sherpa_jni.append(normalized)
+if not removed:
+    raise SystemExit('Expected bundled libonnxruntime.so was not found in Sherpa AAR')
+if not kept_sherpa_jni:
+    raise SystemExit('Sherpa JNI was unexpectedly missing from repacked AAR')
+os.replace(tmp, dst)
+print('Removed duplicate ORT:', ', '.join(removed))
+print('Kept Sherpa JNI:', ', '.join(kept_sherpa_jni))
+PY
+if unzip -l "$SHERPA_AAR" | grep -q 'libonnxruntime.so'; then
+  echo "Duplicate ONNX Runtime still present in repacked Sherpa AAR" >&2
+  exit 1
+fi
+unzip -l "$SHERPA_AAR" | grep -q 'libsherpa-onnx-jni.so'
 
 fetch "$MODEL_URL" "$MODEL" 100000000
 fetch "$TOKENS_URL" "$TOKENS" 100
