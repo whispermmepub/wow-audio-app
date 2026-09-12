@@ -10,8 +10,8 @@ final class TtsText {
     private TtsText() { }
 
     /**
-     * Keep first speech fast, then use shorter phrase-focused chunks so Auto Mood can react to
-     * dialogue, sentence endings and emotion more precisely without changing the TTS provider.
+     * Keep first speech fast, then use shorter phrase-focused chunks so narration can react to
+     * Burmese punctuation and structural line breaks without changing the TTS provider.
      */
     static List<String> chunks(String text) {
         List<String> out = new ArrayList<>();
@@ -26,7 +26,7 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 58 : 120);
+            int end = findBreak(normalized, start, limit, first ? 42 : 80);
             if (end <= start) end = limit;
             String chunk = clean(normalized.substring(start, end));
             if (!chunk.isEmpty() && containsMyanmar(chunk)) {
@@ -39,9 +39,10 @@ final class TtsText {
     }
 
     /**
-     * Normalizes text once before every voice engine sees it. Some EPUB generators accidentally
-     * store escaped line endings (\\n / \\r / \\t) or stray runs such as "n n n n" in text
-     * nodes. Those artifacts should never be narrated, but ordinary English words are preserved.
+     * Normalizes text once before every voice engine sees it. Some EPUB generators store escaped
+     * line endings (\\n / \\r / \\t) or stray runs such as "n n n n" in text nodes. Escaped line
+     * endings are converted to REAL newlines so heading/body boundaries can become audible pauses.
+     * Isolated n filler is removed, but its surrounding structural newlines are preserved.
      */
     static String normalizeForSpeech(String value) {
         if (value == null) return "";
@@ -58,7 +59,9 @@ final class TtsText {
                 .replace("\r\n", "\n")
                 .replace('\r', '\n');
 
-        // Remove malformed EPUB filler that consists only of isolated Latin n tokens.
+        // Remove malformed EPUB filler that consists only of isolated Latin n tokens. Keep the
+        // line itself empty rather than replacing it with a space; this preserves a heading/body
+        // or paragraph boundary for the pause engine.
         s = s.replaceAll("(?im)^[ \\t]*(?:[nN][ \\t]+){1,}[nN][ \\t]*$", "")
                 .replaceAll("(?im)^[ \\t]*[nN][ \\t]*$", "")
                 .replaceAll("(?i)(?<![A-Za-z])n(?:[ \\t]+n){1,}(?![A-Za-z])", " ");
@@ -68,28 +71,28 @@ final class TtsText {
 
     private static int findBreak(String text, int start, int limit, int minChars) {
         if (limit >= text.length()) return text.length();
-        int floor = Math.min(limit - 1, start + Math.max(24, minChars));
+        int floor = Math.min(limit - 1, start + Math.max(18, minChars));
 
-        // Paragraph boundaries carry the strongest natural pause.
-        for (int i = floor; i + 1 < limit; i++) {
+        // Structural newlines must not be swallowed by a later punctuation search. A heading or
+        // line-ending before a full stop is a real reading boundary and should become a pause.
+        for (int i = start; i + 1 < limit; i++) {
             if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
         }
+        for (int i = floor; i < limit; i++) {
+            if (text.charAt(i) == '\n') return i + 1;
+        }
 
-        // Prefer the first full sentence after the minimum length. Include a closing quote so the
-        // following chunk starts cleanly with a new narrator/dialogue phrase.
+        // Full Burmese sentence endings are hard boundaries. Include closing quotes so the next
+        // segment starts cleanly and the service can insert a deliberate pause between segments.
         for (int i = floor; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '။' || c == '!' || c == '?' || c == '…') return includeClosingQuotes(text, i + 1, limit);
             if (c == '.' && englishSentenceEnd(text, i)) return includeClosingQuotes(text, i + 1, limit);
         }
 
-        // A single structural line break is useful, but less important than sentence punctuation.
+        // Burmese phrase comma is also a reading boundary. Prefer it over an arbitrary whitespace
+        // split so a short natural breath is possible at '၊'.
         for (int i = floor; i < limit; i++) {
-            if (text.charAt(i) == '\n') return i + 1;
-        }
-
-        // Phrase punctuation is a fallback when a sentence is long.
-        for (int i = limit - 1; i >= floor; i--) {
             char c = text.charAt(i);
             if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
