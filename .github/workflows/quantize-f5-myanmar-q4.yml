@@ -1,0 +1,162 @@
+name: Quantize F5 Myanmar Q4
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/quantize-f5-myanmar-q4.yml'
+
+jobs:
+  quantize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout WoW Audio
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ONNX quantization dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'onnxruntime>=1.23' 'onnx>=1.17' onnxslim onnxconverter-common
+          git clone --depth 1 https://github.com/DakeQQ/F5-TTS-ONNX.git /tmp/F5-TTS-ONNX
+
+      - name: Download small F5 graphs from verified export
+        uses: actions/download-artifact@v4
+        with:
+          name: F5-Myanmar-ONNX-small
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34693710394
+          path: /tmp/f5-small
+
+      - name: Download Transformer part 00
+        uses: actions/download-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-00
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34693710394
+          path: /tmp/f5-parts/00
+
+      - name: Download Transformer part 01
+        uses: actions/download-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-01
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34693710394
+          path: /tmp/f5-parts/01
+
+      - name: Download Transformer part 02
+        uses: actions/download-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-02
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34693710394
+          path: /tmp/f5-parts/02
+
+      - name: Download Transformer part 03
+        uses: actions/download-artifact@v4
+        with:
+          name: F5-Myanmar-Transformer-part-03
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34693710394
+          path: /tmp/f5-parts/03
+
+      - name: Reassemble and verify FP16 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/f5-source
+          cp /tmp/f5-small/F5_Preprocess.onnx /tmp/f5-source/
+          cp /tmp/f5-small/F5_Decode.onnx /tmp/f5-source/
+          cp /tmp/f5-small/F5_Metadata.onnx /tmp/f5-source/
+          cp /tmp/f5-small/vocab.txt /tmp/f5-source/
+          cat \
+            /tmp/f5-parts/00/F5_Transformer.onnx.part-00 \
+            /tmp/f5-parts/01/F5_Transformer.onnx.part-01 \
+            /tmp/f5-parts/02/F5_Transformer.onnx.part-02 \
+            /tmp/f5-parts/03/F5_Transformer.onnx.part-03 \
+            > /tmp/f5-source/F5_Transformer.onnx
+          test "$(sha256sum /tmp/f5-source/F5_Transformer.onnx | awk '{print $1}')" = "816f09fa4f3d2d5c1429240fa86b224981df8b1a075627658b01ddfa5c964343"
+          ls -lh /tmp/f5-source
+
+      - name: Quantize Transformer to Q4 MatMulNBits
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, '/tmp/F5-TTS-ONNX/Export_ONNX')
+          from Optimize_ONNX_Common import OptimizerConfig, Plan, run_optimizer
+
+          source = '/tmp/f5-source'
+          output = '/tmp/f5-q4'
+          Path(output).mkdir(parents=True, exist_ok=True)
+          config = OptimizerConfig(
+              original_folder_path=source,
+              optimized_folder_path=output,
+              model_plans={
+                  'F5_Transformer': Plan(
+                      method='Q4',
+                      algo='DEFAULT',
+                      block_size=32,
+                      accuracy_level=4,
+                      symmetric=False,
+                      optimize=False,
+                      transformer=True,
+                      num_heads=16,
+                      hidden_size=1024,
+                  )
+              },
+              optimizer_level=2,
+          )
+          run_optimizer(config)
+          PY
+
+      - name: Assemble Q4 local runtime pack and smoke-load
+        run: |
+          set -euo pipefail
+          cp /tmp/f5-source/F5_Preprocess.onnx /tmp/f5-q4/
+          cp /tmp/f5-source/F5_Decode.onnx /tmp/f5-q4/
+          cp /tmp/f5-source/F5_Metadata.onnx /tmp/f5-q4/
+          cp /tmp/f5-source/vocab.txt /tmp/f5-q4/
+          cat > /tmp/f5-q4/README.txt <<'EOF'
+          WoW Audio F5 Myanmar Q4 local runtime pack
+          Foundation: freococo/F5-Myanmar-TTS
+          License: CC BY-NC 4.0 — non-commercial use only
+          Transformer: Q4 MatMulNBits, block size 32
+          Runtime target: ONNX Runtime Android / CPU
+          Sample rate: 24000 Hz
+          Private reference voice is intentionally not included.
+          EOF
+          (cd /tmp/f5-q4 && sha256sum F5_Preprocess.onnx F5_Transformer.onnx F5_Decode.onnx F5_Metadata.onnx vocab.txt > SHA256SUMS.txt)
+          python - <<'PY'
+          import onnxruntime as ort
+          from pathlib import Path
+          root = Path('/tmp/f5-q4')
+          for name in ('F5_Metadata.onnx','F5_Preprocess.onnx','F5_Transformer.onnx','F5_Decode.onnx'):
+              s = ort.InferenceSession(str(root / name), providers=['CPUExecutionProvider'])
+              print(name, 'OK', [(x.name, x.type, x.shape) for x in s.get_inputs()])
+          PY
+          ls -lh /tmp/f5-q4
+
+      - name: Upload Q4 runtime pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-F5-Myanmar-Q4-NONCOMMERCIAL
+          path: /tmp/f5-q4/
+          retention-days: 7
+          compression-level: 0
