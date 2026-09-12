@@ -9,7 +9,7 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v3-gemini-like";
+    static final String RENDER_VERSION = "burmese-prosody-v4-pause-boundaries";
 
     static final class Profile {
         final float speedMultiplier;
@@ -31,7 +31,7 @@ final class BurmeseProsody {
     private BurmeseProsody() { }
 
     static Profile neutral() {
-        return new Profile(1.0f, 1.0f, 0, 90, "Natural");
+        return new Profile(1.0f, 1.0f, 0, 105, "Natural");
     }
 
     static Profile analyze(String text, String readingStyle) {
@@ -68,8 +68,10 @@ final class BurmeseProsody {
         boolean exclamation = s.indexOf('!') >= 0;
         boolean dialogue = looksLikeDialogue(s);
         boolean ellipsis = hasEllipsis(s);
-        boolean paragraph = s.contains("\n\n");
+        boolean paragraph = hasStructuralLineBreak(s);
         boolean quotedQuestion = dialogue && question;
+        boolean sentenceEnd = endsWithFullStop(s);
+        boolean phraseEnd = endsWithPhrasePause(s);
 
         int sadScore = score(s,
                 "ဝမ်းနည်း", "မျက်ရည်", "ငို", "ဆုံးရှုံး", "နာကျင်", "ကြေကွဲ", "လွမ်း", "သေဆုံး",
@@ -112,7 +114,7 @@ final class BurmeseProsody {
                 speedDelta += 0.020f;
                 pitchDelta += 0.008f;
                 gain += 80;
-                pause = Math.max(60, pause - 10);
+                pause = Math.max(70, pause - 10);
                 label = "Tense";
             } else if (joyfulScore == strongest) {
                 speedDelta += 0.016f;
@@ -155,13 +157,30 @@ final class BurmeseProsody {
             pause += 10;
             if ("Natural".equals(label)) label = "Dialogue";
         }
-        if (paragraph) pause += 25;
 
-        // Multiple matching mood words make the cue a little stronger, but never theatrical.
+        // Burmese reading cadence: a full stop gets a settled, slightly lower landing before a
+        // clearly audible pause. Phrase comma gets a smaller breath. Structural line breaks get
+        // the longest pause so headings and body text do not run together.
+        if (sentenceEnd && !question && !exclamation && !ellipsis) {
+            speedDelta -= 0.010f;
+            pitchDelta -= 0.012f;
+            pause += 65;
+            if ("Natural".equals(label)) label = "Sentence End";
+        } else if (phraseEnd) {
+            speedDelta -= 0.006f;
+            pitchDelta -= 0.005f;
+            pause += 38;
+            if ("Natural".equals(label)) label = "Phrase Pause";
+        }
+        if (paragraph) {
+            speedDelta -= 0.012f;
+            pitchDelta -= 0.010f;
+            pause += 115;
+            if ("Natural".equals(label)) label = "Line Break";
+        }
+
         float cueBoost = 1.0f + Math.min(0.22f, Math.max(0, strongest - 1) * 0.07f);
         if (geminiLike) {
-            // Gemini-like mode keeps the original Nilar / Thiha timbre and fast synthesis path,
-            // but gives sentence melody, emphasis and pauses a wider audiobook-style contour.
             cueBoost += 0.18f;
             speedDelta *= 1.16f;
             pitchDelta *= 1.20f;
@@ -171,8 +190,9 @@ final class BurmeseProsody {
                 gain += 28;
             }
             if (ellipsis) pause += 28;
-            if (paragraph) pause += 32;
-            if (strongest == 0 && !question && !exclamation && !ellipsis && !dialogue) {
+            if (paragraph) pause += 35;
+            if (strongest == 0 && !question && !exclamation && !ellipsis && !dialogue
+                    && !sentenceEnd && !phraseEnd && !paragraph) {
                 speedDelta -= 0.006f;
                 pause += 8;
                 label = "Narrator";
@@ -184,16 +204,22 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
+        // Punctuation and structural pauses are reading grammar, not just an optional style. Keep
+        // a useful minimum even in Normal mode while leaving emotional modulation style-dependent.
+        if (sentenceEnd) expressivePause = Math.max(expressivePause, 190);
+        if (phraseEnd) expressivePause = Math.max(expressivePause, 115);
+        if (paragraph) expressivePause = Math.max(expressivePause, 320);
+
         if (geminiLike) {
-            speed = clamp(speed, 0.910f, 1.080f);
-            pitch = clamp(pitch, 0.940f, 1.070f);
+            speed = clamp(speed, 0.900f, 1.080f);
+            pitch = clamp(pitch, 0.925f, 1.070f);
             expressiveGain = clamp(expressiveGain, 0, 240);
-            expressivePause = clamp(expressivePause, 50, 330);
+            expressivePause = clamp(expressivePause, 70, 420);
         } else {
-            speed = clamp(speed, 0.935f, 1.055f);
-            pitch = clamp(pitch, 0.965f, 1.045f);
+            speed = clamp(speed, 0.925f, 1.055f);
+            pitch = clamp(pitch, 0.950f, 1.045f);
             expressiveGain = clamp(expressiveGain, 0, 180);
-            expressivePause = clamp(expressivePause, 55, 270);
+            expressivePause = clamp(expressivePause, 70, 360);
         }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
@@ -225,18 +251,33 @@ final class BurmeseProsody {
             cue = "Keep the delivery natural, clear, and conversationally paced.";
         }
         return "Use natural Burmese prosody and phrasing. Respect Myanmar punctuation, sentence endings, ellipses, and paragraph rhythm; "
-                + "give questions a subtle rise, statements a settled ending, and dialogue restrained character contrast. "
+                + "give questions a subtle rise, statements a settled lower ending, and dialogue restrained character contrast. "
+                + "Pause clearly at Burmese full stops and phrase commas, and give structural line/paragraph breaks enough space so headings never run into body text. "
                 + cue + " Preserve every written word exactly.";
     }
 
     private static int boundaryPause(String s) {
         String value = stripClosingQuotes(s.trim());
-        if (value.endsWith("\n\n")) return 220;
-        if (hasEllipsis(value)) return 185;
-        if (value.endsWith("?") || value.endsWith("!")) return 145;
-        if (value.endsWith("။") || value.endsWith(".")) return 115;
-        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 72;
-        return 88;
+        if (hasStructuralLineBreak(s)) return 320;
+        if (hasEllipsis(value)) return 205;
+        if (value.endsWith("?") || value.endsWith("!")) return 175;
+        if (value.endsWith("။") || value.endsWith(".")) return 190;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 115;
+        return 95;
+    }
+
+    private static boolean endsWithFullStop(String s) {
+        String value = stripClosingQuotes(s.trim());
+        return value.endsWith("။") || value.endsWith(".");
+    }
+
+    private static boolean endsWithPhrasePause(String s) {
+        String value = stripClosingQuotes(s.trim());
+        return value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":");
+    }
+
+    private static boolean hasStructuralLineBreak(String s) {
+        return s.indexOf('\n') >= 0;
     }
 
     private static boolean isQuestion(String s) {
