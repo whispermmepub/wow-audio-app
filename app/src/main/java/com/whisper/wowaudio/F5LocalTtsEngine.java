@@ -18,7 +18,6 @@ import java.util.Map;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OnnxValue;
 import ai.onnxruntime.OrtEnvironment;
-import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 
 /**
@@ -104,7 +103,7 @@ final class F5LocalTtsEngine implements AutoCloseable {
         OrtSession.Result preResult = null;
         OrtSession.Result stateOwner = null;
         try {
-            audioTensor = OnnxTensor.createTensor(env, new float[][][]{reference});
+            audioTensor = OnnxTensor.createTensor(env, new float[][][]{{reference}});
             textTensor = OnnxTensor.createTensor(env, new int[][]{textIds});
             durationTensor = OnnxTensor.createTensor(env, new long[]{maxDuration});
 
