@@ -1,0 +1,222 @@
+name: Apply Nilar Thiha Audiobook v5
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/apply-nilar-thiha-v5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.9.0-aung-gyi-f5-local
+
+      - name: Apply natural Nilar Thiha tuning
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}')
+              p.write_text(s.replace(old, new), encoding='utf-8')
+
+          # Edge: never send structural newlines or stray standalone n noise to Microsoft TTS.
+          path = 'app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java'
+          old = '''    private static String cleanInput(String value) {
+        if (value == null) return "";
+        StringBuilder out = new StringBuilder(value.length());
+        for (int i = 0; i < value.length();) {
+            int cp = value.codePointAt(i);
+            i += Character.charCount(cp);
+            if ((cp >= 0 && cp <= 8) || (cp >= 11 && cp <= 12) || (cp >= 14 && cp <= 31)) out.append(' ');
+            else out.appendCodePoint(cp);
+        }
+        return out.toString().trim();
+    }
+'''
+          new = '''    private static String cleanInput(String value) {
+        if (value == null) return "";
+        // TtsText owns EPUB cleanup. Structural newlines are useful to the local prosody layer but
+        // must never be sent to the network voice as text. This also gives us a final hard guard
+        // against the stray standalone Latin n/N artifact seen in converted Myanmar EPUBs.
+        String normalized = TtsText.normalizeForSpeech(value).replace('\\n', ' ');
+        StringBuilder out = new StringBuilder(normalized.length());
+        for (int i = 0; i < normalized.length();) {
+            int cp = normalized.codePointAt(i);
+            i += Character.charCount(cp);
+            if ((cp >= 0 && cp <= 8) || (cp >= 11 && cp <= 12) || (cp >= 14 && cp <= 31)) out.append(' ');
+            else out.appendCodePoint(cp);
+        }
+        return out.toString()
+                .replaceAll("(?i)(?<![A-Za-z0-9])n(?![A-Za-z0-9])", " ")
+                .replaceAll("\\\\s+", " ")
+                .trim();
+    }
+'''
+          replace(path, old, new)
+
+          old = '''                    int percent = Math.round((speed - 1.0f) * 100f);
+                    String rate = (percent >= 0 ? "+" : "") + percent + "%";
+                    String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>"
+                            + "<voice name='" + voice + "'><prosody pitch='+0Hz' rate='" + rate
+                            + "' volume='+0%'>" + escapeXml(text) + "</prosody></voice></speak>";
+'''
+          new = '''                    // Small voice-specific baseline tuning keeps both voices closer to a human
+                    // audiobook cadence without aggressive DSP. User speed is still respected.
+                    int voiceRateOffset = VOICE_NILAR.equals(voice) ? -2 : -1;
+                    int percent = Math.round((speed - 1.0f) * 100f) + voiceRateOffset;
+                    String rate = (percent >= 0 ? "+" : "") + percent + "%";
+                    String pitch = VOICE_THIHA.equals(voice) ? "-1Hz" : "+0Hz";
+                    String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>"
+                            + "<voice name='" + voice + "'><prosody pitch='" + pitch + "' rate='" + rate
+                            + "' volume='+0%'>" + escapeXml(text) + "</prosody></voice></speak>";
+'''
+          replace(path, old, new)
+
+          # Prosody v5: human audiobook-like breathing spaces; sentence landings are clear but not
+          # robotic, commas are shorter, ellipses and paragraph changes get room to breathe.
+          path = 'app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java'
+          replace(path,
+                  'static final String RENDER_VERSION = "burmese-prosody-v4-pause-boundaries";',
+                  'static final String RENDER_VERSION = "burmese-prosody-v5-human-cadence";')
+          replace(path,
+                  'return new Profile(1.0f, 1.0f, 0, 105, "Natural");',
+                  'return new Profile(1.0f, 1.0f, 0, 78, "Natural");')
+          old = '''    private static int boundaryPause(String raw) {
+        if (hasStructuralLineBreak(raw)) return 320;
+        String value = stripClosingQuotes(raw.trim());
+        if (hasEllipsis(value)) return 205;
+        if (value.endsWith("?") || value.endsWith("!")) return 175;
+        if (value.endsWith("။") || value.endsWith(".")) return 190;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 115;
+        return 95;
+    }
+'''
+          new = '''    private static int boundaryPause(String raw) {
+        if (hasStructuralLineBreak(raw)) return 360;
+        String value = stripClosingQuotes(raw.trim());
+        if (hasEllipsis(value)) return 290;
+        if (value.endsWith("?")) return 225;
+        if (value.endsWith("!")) return 190;
+        if (value.endsWith("။") || value.endsWith(".")) return 230;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 110;
+        return 72;
+    }
+'''
+          replace(path, old, new)
+          replace(path,
+                  'if (sentenceEnd) expressivePause = Math.max(expressivePause, 190);',
+                  'if (sentenceEnd) expressivePause = Math.max(expressivePause, 230);')
+          replace(path,
+                  'if (phraseEnd) expressivePause = Math.max(expressivePause, 115);',
+                  'if (phraseEnd) expressivePause = Math.max(expressivePause, 110);')
+          replace(path,
+                  'if (paragraph) expressivePause = Math.max(expressivePause, 320);',
+                  'if (paragraph) expressivePause = Math.max(expressivePause, 360);')
+          replace(path,
+                  'expressivePause = clamp(expressivePause, 70, 360);',
+                  'expressivePause = clamp(expressivePause, 55, 420);')
+
+          # F5/custom voice is retired from the selectable engine path. Existing users who had F5
+          # saved are migrated automatically to WoW Natural instead of falling into a dead engine.
+          path = 'app/src/main/java/com/whisper/wowaudio/VoiceSettings.java'
+          old = '''    static String engine(Context context) {
+        String value = prefs(context).getString("engine", ENGINE_EDGE);
+        if (ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) || ENGINE_F5.equals(value)) return value;
+        return ENGINE_EDGE;
+    }
+
+    static void setEngine(Context context, String value) {
+        String safe = ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) || ENGINE_F5.equals(value) ? value : ENGINE_EDGE;
+        prefs(context).edit().putString("engine", safe).apply();
+    }
+'''
+          new = '''    static String engine(Context context) {
+        String value = prefs(context).getString("engine", ENGINE_EDGE);
+        if (ENGINE_F5.equals(value)) {
+            prefs(context).edit().putString("engine", ENGINE_EDGE).apply();
+            return ENGINE_EDGE;
+        }
+        if (ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value)) return value;
+        return ENGINE_EDGE;
+    }
+
+    static void setEngine(Context context, String value) {
+        String safe = ENGINE_GEMINI.equals(value) || ENGINE_OFFLINE.equals(value) ? value : ENGINE_EDGE;
+        prefs(context).edit().putString("engine", safe).apply();
+    }
+'''
+          replace(path, old, new)
+
+          # Remove F5/custom controls from Settings. Keep old importer code unreachable for now so
+          # this quality pass is low-risk; it can be deleted in a later cleanup commit.
+          path = 'app/src/main/java/com/whisper/wowaudio/SettingsActivity.java'
+          replace(path,
+                  '        f5Engine = radio("F5 Myanmar • Default (Online)");\n',
+                  '')
+          replace(path,
+                  '        engineGroup.addView(f5Engine);\n',
+                  '')
+          block = '''        root.addView(section("Optional Custom Voice Files • အောင်ကြီး"), marginTop(22));
+        f5Status = body("");
+        root.addView(f5Status, marginTop(5));
+        LinearLayout f5Actions = new LinearLayout(this);
+        f5Actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button importModel = secondary("Import Model ZIP");
+        importModel.setOnClickListener(v -> pickF5Model());
+        f5Actions.addView(importModel, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        Button importVoice = secondary("Import Voice WAV");
+        importVoice.setOnClickListener(v -> pickF5Reference());
+        LinearLayout.LayoutParams f5vp = new LinearLayout.LayoutParams(0, dp(56), 1f);
+        f5vp.leftMargin = dp(8);
+        f5Actions.addView(importVoice, f5vp);
+        root.addView(f5Actions, marginTop(10));
+        root.addView(body("F5 Myanmar • Default ကို သုံးဖို့ ZIP/WAV မလိုပါ။ Internet ရှိရင် public F5 Myanmar service က default Burmese voice ထုတ်ပေးပါတယ်။ အောက်က Model ZIP / Voice WAV က အောင်ကြီး custom voice စမ်းသပ်မှုအတွက် optional အဖြစ်သာ သိမ်းထားပါတယ်။"), marginTop(8));
+
+'''
+          replace(path, block, '')
+          replace(path,
+                  '        else if (VoiceSettings.ENGINE_F5.equals(engine)) f5Engine.setChecked(true);\n',
+                  '')
+          replace(path,
+                  '            else if (f5Engine.isChecked()) engine = VoiceSettings.ENGINE_F5;\n',
+                  '')
+
+          print('Nilar/Thiha audiobook v5 patch applied')
+          PY
+
+          git diff --check
+
+      - name: Run text and prosody tests
+        shell: bash
+        run: |
+          gradle :app:testDebugUnitTest --tests com.whisper.wowaudio.TtsTextTest --tests com.whisper.wowaudio.BurmeseProsodyTest --stacktrace
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name 'AungSoe Moe'
+          git config user.email '61192036+whispermmepub@users.noreply.github.com'
+          git add app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java \
+                  app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java \
+                  app/src/main/java/com/whisper/wowaudio/VoiceSettings.java \
+                  app/src/main/java/com/whisper/wowaudio/SettingsActivity.java
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+          else
+            git commit -m 'Make Nilar and Thiha the polished primary voices'
+            git push origin HEAD:feature/v1.9.0-aung-gyi-f5-local
+          fi
