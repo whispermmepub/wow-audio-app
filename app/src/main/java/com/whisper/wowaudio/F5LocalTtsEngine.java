@@ -10,10 +10,10 @@ import java.nio.charset.StandardCharsets;
  * Crash-safe Aung Gyi/F5 voice bridge.
  *
  * The local Q4 ONNX runtime can terminate the Android process inside native ONNX Runtime on some
- * phones. To keep playback reliable, this class does not enter that unsafe native path from the
- * main audiobook process. It first calls the public F5 Myanmar Space with the user's imported
- * reference WAV, which preserves the actual cloned Aung Gyi timbre. If the Space is unavailable,
- * playback still falls back to saved Gemini TTS and finally the bundled Burmese offline engine.
+ * phones. This class therefore never enters any native fallback path. It first calls the public
+ * F5 Myanmar Space with the user's imported reference WAV, then tries the user's Gemini TTS key
+ * when available. If both network paths fail, it throws back to AudiobookService, which can use
+ * the normal non-native Edge Myanmar fallback without taking the app process down.
  *
  * The imported Q4 model stays installed for a future isolated-process local runtime.
  */
@@ -31,7 +31,6 @@ final class F5LocalTtsEngine implements AutoCloseable {
     private final Context appContext;
     private final HuggingFaceF5Client onlineF5 = new HuggingFaceF5Client();
     private final GeminiTtsClient gemini = new GeminiTtsClient();
-    private MmsMyanmarTtsEngine offline;
     private volatile boolean closed;
 
     F5LocalTtsEngine(Context context) {
@@ -48,6 +47,8 @@ final class F5LocalTtsEngine implements AutoCloseable {
         String clean = text == null ? "" : text.trim();
         if (clean.isEmpty()) throw new IllegalArgumentException("No text to synthesize.");
 
+        Throwable f5Failure = null;
+
         // 1) Real F5 Myanmar zero-shot cloning online. This uses the imported Aung Gyi WAV and
         // matching transcript, so unlike generic fallbacks it preserves the selected voice.
         File onlineTemp = new File(appContext.getCacheDir(), "aung-gyi-f5-online.wav");
@@ -62,13 +63,15 @@ final class F5LocalTtsEngine implements AutoCloseable {
             //noinspection ResultOfMethodCallIgnored
             onlineTemp.delete();
             if (cloned.samples.length > 0) return cloned;
-        } catch (Throwable ignored) {
+            f5Failure = new IllegalStateException("Online F5 returned no audio samples.");
+        } catch (Throwable problem) {
+            f5Failure = problem;
             // Network queue/cold-start/service errors must never close the audiobook app.
             //noinspection ResultOfMethodCallIgnored
             onlineTemp.delete();
         }
 
-        // 2) Existing Gemini key, when available, gives a high-quality online Burmese fallback.
+        // 2) Existing Gemini key, when available, gives a high-quality safe online fallback.
         String apiKey = SecureApiKeyStore.getGeminiKey(appContext);
         if (apiKey != null && !apiKey.trim().isEmpty()) {
             File temp = new File(appContext.getCacheDir(), "aung-gyi-safe-gemini.wav");
@@ -90,13 +93,11 @@ final class F5LocalTtsEngine implements AutoCloseable {
             }
         }
 
-        // 3) Last-resort no-network Burmese audio. The app CI smoke-tests this engine.
-        if (offline == null) offline = new MmsMyanmarTtsEngine(appContext);
-        MmsMyanmarTtsEngine.Audio generated = offline.synthesize(clean, 1.0f);
-        if (generated == null || generated.samples == null || generated.samples.length == 0) {
-            throw new IllegalStateException("Safe Burmese fallback produced no audio.");
-        }
-        return new Audio(generated.samples, generated.sampleRate);
+        // Important: do NOT call MmsMyanmarTtsEngine here. A native runtime failure there cannot be
+        // caught by Java and was the reason Play could throw the user back to Home. Let the service
+        // use the normal Edge Myanmar fallback instead.
+        String reason = f5Failure == null ? "Aung Gyi online voice is unavailable." : safeMessage(f5Failure);
+        throw new IllegalStateException("Aung Gyi voice unavailable: " + reason, f5Failure);
     }
 
     /** Read common PCM/float WAV output into mono float samples. */
@@ -200,14 +201,19 @@ final class F5LocalTtsEngine implements AutoCloseable {
         return a | (b << 8) | (c << 16) | (d << 24);
     }
 
+    private static String safeMessage(Throwable problem) {
+        String message = problem == null ? "" : problem.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            message = problem == null ? "unknown error" : problem.getClass().getSimpleName();
+        }
+        message = message.replaceAll("\\s+", " ").trim();
+        return message.length() <= 180 ? message : message.substring(0, 180) + "…";
+    }
+
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
         try { onlineF5.close(); } catch (Throwable ignored) { }
         try { gemini.close(); } catch (Throwable ignored) { }
-        if (offline != null) {
-            try { offline.close(); } catch (Throwable ignored) { }
-            offline = null;
-        }
     }
 }
