@@ -8,6 +8,7 @@ on:
       - '.github/workflows/test-f5-default-api.yml'
   workflow_dispatch:
 
+# Re-run marker: 2026-09-13 device fallback diagnosis
 jobs:
   test-default:
     runs-on: ubuntu-latest
