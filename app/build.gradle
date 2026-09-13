@@ -10,8 +10,8 @@ android {
         applicationId 'com.whisper.wowaudio'
         minSdk 24
         targetSdk 36
-        versionCode 15
-        versionName '1.9.0'
+        versionCode 16
+        versionName '1.9.1'
 
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
@@ -29,7 +29,7 @@ android {
 
     buildTypes {
         debug {
-            // Keep the F5 field-test build installable beside the user's permanently-signed WoW Audio.
+            // Test builds stay installable beside the permanently-signed production WoW Audio.
             // Release builds keep the real com.whisper.wowaudio package unchanged.
             applicationIdSuffix '.f5test'
         }
@@ -50,7 +50,7 @@ dependencies {
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.7.20'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation files('libs/sherpa-onnx-1.13.7.aar')
-    // One shared ONNX Runtime for both Sherpa offline backup and F5 custom voice.
+    // Shared ONNX Runtime used by the offline Burmese safety fallback.
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.29.0'
     testImplementation 'junit:junit:4.13.2'
 }
