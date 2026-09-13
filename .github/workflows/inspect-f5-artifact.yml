@@ -1,0 +1,41 @@
+name: Inspect F5 Runtime Artifact
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/inspect-f5-artifact.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download current Q4 runtime pack
+        uses: actions/download-artifact@v4
+        with:
+          name: WoW-Audio-F5-Myanmar-Q4-NONCOMMERCIAL
+          github-token: ${{ github.token }}
+          repository: whispermmepub/wow-audio-app
+          run-id: 34694722504
+          path: /tmp/f5-q4
+
+      - name: Print exact model hashes and verify files
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== F5 RUNTIME SHA256 ==='
+          sha256sum \
+            /tmp/f5-q4/F5_Preprocess.onnx \
+            /tmp/f5-q4/F5_Transformer.onnx \
+            /tmp/f5-q4/F5_Decode.onnx \
+            /tmp/f5-q4/F5_Metadata.onnx \
+            /tmp/f5-q4/vocab.txt
+          echo '=== EMBEDDED SHA256SUMS ==='
+          cat /tmp/f5-q4/SHA256SUMS.txt
+          echo '=== FILE SIZES ==='
+          stat -c '%n %s' /tmp/f5-q4/F5_Preprocess.onnx /tmp/f5-q4/F5_Transformer.onnx /tmp/f5-q4/F5_Decode.onnx /tmp/f5-q4/F5_Metadata.onnx /tmp/f5-q4/vocab.txt
