@@ -18,40 +18,32 @@ jobs:
         run: |
           set -euo pipefail
           BASE='https://freococo-f5-myanmar-tts-demo.hf.space'
-          echo '=== SPACE HEAD ==='
-          curl -fsSIL --max-time 30 "$BASE/" | sed -n '1,30p'
-          echo '=== OPENAPI ==='
           curl -fsSL --max-time 60 "$BASE/gradio_api/openapi.json" -o /tmp/openapi.json
-          python3 - <<'PY'
-          import json
-          p=json.load(open('/tmp/openapi.json'))
-          print('title=', p.get('info',{}).get('title'))
-          for path, methods in p.get('paths',{}).items():
-              if any(k in path.lower() for k in ('predict','call','upload','file')):
-                  print('PATH', path)
-                  for method,spec in methods.items():
-                      if isinstance(spec,dict):
-                          print(' ', method.upper(), spec.get('operationId'), spec.get('summary'))
-          PY
-          echo '=== CONFIG API NAMES ==='
           curl -fsSL --max-time 60 "$BASE/config" -o /tmp/config.json
           python3 - <<'PY'
-          import json
+          import json, pprint
+          p=json.load(open('/tmp/openapi.json'))
+          print('=== EXACT GENERATE SPEC ===')
+          pprint.pp(p.get('paths',{}).get('/gradio_api/call/v2/generate_speech',{}))
+          print('=== UPLOAD SPEC ===')
+          pprint.pp(p.get('paths',{}).get('/gradio_api/upload',{}))
+          print('=== RELEVANT SCHEMAS ===')
+          schemas=p.get('components',{}).get('schemas',{})
+          for name,schema in schemas.items():
+              low=name.lower()
+              if any(k in low for k in ('generate','file','upload')):
+                  print('SCHEMA',name)
+                  pprint.pp(schema)
           c=json.load(open('/tmp/config.json'))
-          print('version=',c.get('version'))
-          for d in c.get('dependencies',[]):
-              api=d.get('api_name')
-              if api:
-                  print('API',api,'inputs=',d.get('inputs'),'outputs=',d.get('outputs'),'queue=',d.get('queue'))
+          print('=== CONFIG DEPENDENCY ===')
           comps={x.get('id'):x for x in c.get('components',[])}
           for d in c.get('dependencies',[]):
-              api=d.get('api_name')
-              if api:
-                  print('DETAIL',api)
+              if d.get('api_name')=='generate_speech':
+                  pprint.pp(d)
                   for i in d.get('inputs',[]):
-                      x=comps.get(i,{})
-                      print(' IN',i,x.get('type'),x.get('props',{}).get('label'))
+                      print('INPUT COMPONENT',i)
+                      pprint.pp(comps.get(i,{}))
                   for i in d.get('outputs',[]):
-                      x=comps.get(i,{})
-                      print(' OUT',i,x.get('type'),x.get('props',{}).get('label'))
+                      print('OUTPUT COMPONENT',i)
+                      pprint.pp(comps.get(i,{}))
           PY
