@@ -4,8 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class TtsText {
-    private static final int FIRST_MAX_CHARS = 155;
-    private static final int NEXT_MAX_CHARS = 300;
+    private static final int FIRST_MAX_CHARS = 140;
+    private static final int NEXT_MAX_CHARS = 215;
 
     private TtsText() { }
 
@@ -26,7 +26,7 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 36 : 68);
+            int end = findBreak(normalized, start, limit, first ? 32 : 54);
             if (end <= start) end = limit;
 
             String rawChunk = normalized.substring(start, end);
@@ -101,7 +101,8 @@ final class TtsText {
 
         if (limit >= text.length()) return text.length();
 
-        // Only arbitrary whitespace splitting keeps the minimum-length guard.
+        // If a long paragraph has no punctuation, make a soft breath at a word boundary
+        // instead of letting the neural voice run for several hundred characters without rest.
         for (int i = limit - 1; i >= floor; i--) {
             if (Character.isWhitespace(text.charAt(i))) return i + 1;
         }

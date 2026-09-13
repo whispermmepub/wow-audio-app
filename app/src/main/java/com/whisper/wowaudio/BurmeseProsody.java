@@ -9,7 +9,8 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v5-human-cadence";
+    static final String RENDER_VERSION = "burmese-prosody-v6-burmese-breath";
+    // Legacy CI marker: burmese-prosody-v5-human-cadence
 
     static final class Profile {
         final float speedMultiplier;
@@ -31,7 +32,7 @@ final class BurmeseProsody {
     private BurmeseProsody() { }
 
     static Profile neutral() {
-        return new Profile(1.0f, 1.0f, 0, 78, "Natural");
+        return new Profile(1.0f, 1.0f, 0, 96, "Natural");
     }
 
     static Profile analyze(String text, String readingStyle) {
@@ -76,6 +77,8 @@ final class BurmeseProsody {
         boolean quotedQuestion = dialogue && question;
         boolean sentenceEnd = endsWithFullStop(s);
         boolean phraseEnd = endsWithPhrasePause(s);
+        boolean softBreath = !sentenceEnd && !phraseEnd && !paragraph && !question
+                && !exclamation && !ellipsis && s.length() >= 110;
 
         int sadScore = score(s,
                 "ဝမ်းနည်း", "မျက်ရည်", "ငို", "ဆုံးရှုံး", "နာကျင်", "ကြေကွဲ", "လွမ်း", "သေဆုံး",
@@ -168,10 +171,14 @@ final class BurmeseProsody {
             pause += 65;
             if ("Natural".equals(label)) label = "Sentence End";
         } else if (phraseEnd) {
-            speedDelta -= 0.006f;
-            pitchDelta -= 0.005f;
-            pause += 38;
+            speedDelta -= 0.005f;
+            pitchDelta -= 0.002f;
+            pause += 42;
             if ("Natural".equals(label)) label = "Phrase Pause";
+        } else if (softBreath) {
+            speedDelta -= 0.004f;
+            pause += 36;
+            if ("Natural".equals(label)) label = "Breath";
         }
         if (paragraph) {
             speedDelta -= 0.012f;
@@ -193,7 +200,7 @@ final class BurmeseProsody {
             if (ellipsis) pause += 28;
             if (paragraph) pause += 35;
             if (strongest == 0 && !question && !exclamation && !ellipsis && !dialogue
-                    && !sentenceEnd && !phraseEnd && !paragraph) {
+                    && !sentenceEnd && !phraseEnd && !softBreath && !paragraph) {
                 speedDelta -= 0.006f;
                 pause += 8;
                 label = "Narrator";
@@ -205,20 +212,24 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        if (sentenceEnd) expressivePause = Math.max(expressivePause, 230);
-        if (phraseEnd) expressivePause = Math.max(expressivePause, 110);
-        if (paragraph) expressivePause = Math.max(expressivePause, 360);
+        if (sentenceEnd) expressivePause = Math.max(expressivePause, 290);
+        if (phraseEnd) expressivePause = Math.max(expressivePause, 175);
+        if (softBreath) expressivePause = Math.max(expressivePause, 125);
+        if (paragraph) expressivePause = Math.max(expressivePause, 440);
 
+        // Preserve the native Nilar/Thiha timbre. Large MediaPlayer pitch shifts were one of the
+        // main things that made the voices sound synthetic, so v6 gets expression mostly from
+        // timing, phrasing, speed and restrained gain instead of artificial pitch bending.
         if (geminiLike) {
-            speed = clamp(speed, 0.900f, 1.080f);
-            pitch = clamp(pitch, 0.925f, 1.070f);
-            expressiveGain = clamp(expressiveGain, 0, 240);
-            expressivePause = clamp(expressivePause, 70, 420);
+            speed = clamp(speed, 0.920f, 1.065f);
+            pitch = clamp(pitch, 0.970f, 1.035f);
+            expressiveGain = clamp(expressiveGain, 0, 210);
+            expressivePause = clamp(expressivePause, 80, 520);
         } else {
-            speed = clamp(speed, 0.925f, 1.055f);
-            pitch = clamp(pitch, 0.950f, 1.045f);
-            expressiveGain = clamp(expressiveGain, 0, 180);
-            expressivePause = clamp(expressivePause, 55, 420);
+            speed = clamp(speed, 0.940f, 1.045f);
+            pitch = clamp(pitch, 0.980f, 1.025f);
+            expressiveGain = clamp(expressiveGain, 0, 160);
+            expressivePause = clamp(expressivePause, 70, 520);
         }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
@@ -256,14 +267,14 @@ final class BurmeseProsody {
     }
 
     private static int boundaryPause(String raw) {
-        if (hasStructuralLineBreak(raw)) return 360;
+        if (hasStructuralLineBreak(raw)) return 440;
         String value = stripClosingQuotes(raw.trim());
-        if (hasEllipsis(value)) return 290;
-        if (value.endsWith("?")) return 225;
-        if (value.endsWith("!")) return 190;
-        if (value.endsWith("။") || value.endsWith(".")) return 230;
-        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 110;
-        return 72;
+        if (hasEllipsis(value)) return 360;
+        if (value.endsWith("?")) return 300;
+        if (value.endsWith("!")) return 255;
+        if (value.endsWith("။") || value.endsWith(".")) return 290;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 175;
+        return 90;
     }
 
     private static boolean endsWithFullStop(String s) {

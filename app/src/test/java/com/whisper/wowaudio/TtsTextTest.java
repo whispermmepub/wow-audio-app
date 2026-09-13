@@ -48,7 +48,7 @@ public final class TtsTextTest {
         List<String> chunks = TtsText.chunks(text.toString());
         assertTrue(chunks.size() >= 3);
         for (int i = 1; i < chunks.size() - 1; i++) {
-            assertTrue(chunks.get(i).length() <= 305);
+            assertTrue(chunks.get(i).length() <= 220);
         }
     }
 

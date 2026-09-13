@@ -128,7 +128,7 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
                     int voiceRateOffset = VOICE_NILAR.equals(voice) ? -2 : -1;
                     int percent = Math.round((speed - 1.0f) * 100f) + voiceRateOffset;
                     String rate = (percent >= 0 ? "+" : "") + percent + "%";
-                    String pitch = VOICE_THIHA.equals(voice) ? "-1Hz" : "+0Hz";
+                    String pitch = "+0Hz";
                     String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>"
                             + "<voice name='" + voice + "'><prosody pitch='" + pitch + "' rate='" + rate
                             + "' volume='+0%'>" + escapeXml(text) + "</prosody></voice></speak>";
