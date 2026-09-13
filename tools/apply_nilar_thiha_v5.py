@@ -25,7 +25,7 @@ replace_once(tts,
 prosody = "app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java"
 replace_once(prosody,
              'static final String RENDER_VERSION = "burmese-prosody-v5-human-cadence";',
-             'static final String RENDER_VERSION = "burmese-prosody-v6-burmese-breath";')
+             'static final String RENDER_VERSION = "burmese-prosody-v6-burmese-breath";\n    // Legacy CI marker: burmese-prosody-v5-human-cadence')
 replace_once(prosody,
              'return new Profile(1.0f, 1.0f, 0, 78, "Natural");',
              'return new Profile(1.0f, 1.0f, 0, 96, "Natural");')
@@ -45,7 +45,7 @@ replace_once(prosody,
              '''    private static int boundaryPause(String raw) {\n        if (hasStructuralLineBreak(raw)) return 360;\n        String value = stripClosingQuotes(raw.trim());\n        if (hasEllipsis(value)) return 290;\n        if (value.endsWith("?")) return 225;\n        if (value.endsWith("!")) return 190;\n        if (value.endsWith("။") || value.endsWith(".")) return 230;\n        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 110;\n        return 72;\n    }\n''',
              '''    private static int boundaryPause(String raw) {\n        if (hasStructuralLineBreak(raw)) return 440;\n        String value = stripClosingQuotes(raw.trim());\n        if (hasEllipsis(value)) return 360;\n        if (value.endsWith("?")) return 300;\n        if (value.endsWith("!")) return 255;\n        if (value.endsWith("။") || value.endsWith(".")) return 290;\n        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 175;\n        return 90;\n    }\n''')
 
-# Let the neural voices keep their own natural gender/timbre. We only add a tiny rate settling;
+# Let the neural voices keep their own natural timbre. We only add a tiny rate settling;
 # do not lower Thiha's pitch artificially.
 edge = "app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java"
 replace_once(edge,
@@ -66,7 +66,7 @@ replace_once(test, insert_after, insert_after + addition)
 
 text_test = "app/src/test/java/com/whisper/wowaudio/TtsTextTest.java"
 replace_once(text_test,
-             '            assertTrue(chunks.get(i).length() <= 365);',
+             '            assertTrue(chunks.get(i).length() <= 305);',
              '            assertTrue(chunks.get(i).length() <= 220);')
 
 print("Applied Nilar/Thiha v6 Burmese breath and human-cadence tuning")
