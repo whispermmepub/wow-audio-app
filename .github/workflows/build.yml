@@ -1,4 +1,4 @@
-name: Build WoW Audio v1.9.0 Aung Gyi local voice
+name: Build WoW Audio Nilar Thiha audiobook v5
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
           test "$(stat -c%s /tmp/nilar.mp3)" -gt 3000
           test "$(stat -c%s /tmp/thiha.mp3)" -gt 3000
 
-      - name: Verify v1.9.0 audiobook contract
+      - name: Verify Nilar Thiha audiobook v5 contract
         shell: bash
         run: |
           set -euo pipefail
@@ -78,19 +78,17 @@ jobs:
           grep -q "minSdk 24" app/build.gradle
           grep -q "versionCode 15" app/build.gradle
           grep -q "versionName '1.9.0'" app/build.gradle
-          grep -q 'burmese-prosody-v4-pause-boundaries' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
+          grep -q 'burmese-prosody-v5-human-cadence' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
           grep -q 'Pause clearly at Burmese full stops' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
-          grep -q 'Structural newlines must not be swallowed' app/src/main/java/com/whisper/wowaudio/TtsText.java
+          grep -q 'removesSingleStandaloneNNoiseAnywhereInBurmeseText' app/src/test/java/com/whisper/wowaudio/TtsTextTest.java
           grep -q 'Never cross-read a different Edge voice' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
-          grep -q 'STYLE_GEMINI_EXPRESSIVE' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
-          grep -q 'ENGINE_F5' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
-          grep -q 'F5LocalTtsEngine' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
-          grep -q 'HuggingFaceF5Client' app/src/main/java/com/whisper/wowaudio/F5LocalTtsEngine.java
-          grep -q 'onnxruntime-android:1.29.0' app/build.gradle
-          grep -q 'VIEW_SMALL_LIST' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
-          grep -q 'VIEW_SMALL_GRID' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
           grep -q 'my-MM-ThihaNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'voiceRateOffset' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'ENGINE_F5.equals(value)' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'putString("engine", ENGINE_EDGE)' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
+          grep -q 'VIEW_SMALL_LIST' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
+          grep -q 'VIEW_SMALL_GRID' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           test -s app/src/main/assets/tts/mya/model.onnx
           test -s app/src/main/assets/tts/mya/tokens.txt
           test -s app/libs/sherpa-onnx-1.13.7.aar
@@ -100,7 +98,7 @@ jobs:
           fi
           git diff --check
 
-      - name: Test speech cleanup and pause prosody, build and lint
+      - name: Test speech cleanup and prosody, build and lint
         shell: bash
         run: |
           set -euo pipefail
@@ -155,33 +153,33 @@ jobs:
         run: |
           set -euo pipefail
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
-          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed.apk
+          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.9.0-Nilar-Thiha-v5-UPDATE-signed.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" sign --ks /tmp/WoW-Audio-update-key.jks --ks-key-alias "$WOW_AUDIO_KEY_ALIAS" --ks-pass env:WOW_AUDIO_STORE_PASSWORD --key-pass env:WOW_AUDIO_KEY_PASSWORD --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$SIGNED" "$UNSIGNED"
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee /tmp/apksigner.txt
           grep -qi '5f58ab463c3a43275dd768fb3bdb2aaef388b5c18a4d6076b0c5339b4aee0fe1' /tmp/apksigner.txt
 
-      - name: Upload v1.9.0 update-install signed APK
+      - name: Upload update-install signed APK
         if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed
-          path: app/build/outputs/apk/release/WoW-Audio-v1.9.0-Aung-Gyi-UPDATE-signed.apk
+          name: WoW-Audio-v1.9.0-Nilar-Thiha-v5-UPDATE-signed
+          path: app/build/outputs/apk/release/WoW-Audio-v1.9.0-Nilar-Thiha-v5-UPDATE-signed.apk
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload v1.9.0 side-by-side test APK
+      - name: Upload Nilar Thiha v5 side-by-side test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.0-Aung-Gyi-side-by-side-test
+          name: WoW-Audio-v1.9.0-Nilar-Thiha-v5-side-by-side-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
 
-      - name: Upload v1.9.0 unsigned release
+      - name: Upload unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.0-Aung-Gyi-release-unsigned
+          name: WoW-Audio-v1.9.0-Nilar-Thiha-v5-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
