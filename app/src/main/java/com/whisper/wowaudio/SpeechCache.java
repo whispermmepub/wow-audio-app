@@ -29,8 +29,10 @@ final class SpeechCache {
                              float speed, String text, String extension) {
         String voiceId = safe(voice);
         File dir = new File(book.directory, "speech-cache/" + engine + "/" + voiceId);
-        String signature = sha256(voice + "\n" + String.format(Locale.US, "%.2f", speed)
-                + "\n" + text);
+        // Include the narration render version so cleanup/prosody upgrades cannot reuse stale audio
+        // generated before an n/N-artifact or voice-tuning fix.
+        String signature = sha256(BurmeseProsody.RENDER_VERSION + "\n" + voice + "\n"
+                + String.format(Locale.US, "%.2f", speed) + "\n" + text);
         return new File(dir, String.format(Locale.US, "%05d-%s%s", index, signature.substring(0, 16), extension));
     }
 
