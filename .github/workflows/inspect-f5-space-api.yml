@@ -1,0 +1,57 @@
+name: Inspect F5 Myanmar Space API
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/inspect-f5-space-api.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Inspect public Gradio API
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://freococo-f5-myanmar-tts-demo.hf.space'
+          echo '=== SPACE HEAD ==='
+          curl -fsSIL --max-time 30 "$BASE/" | sed -n '1,30p'
+          echo '=== OPENAPI ==='
+          curl -fsSL --max-time 60 "$BASE/gradio_api/openapi.json" -o /tmp/openapi.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('/tmp/openapi.json'))
+          print('title=', p.get('info',{}).get('title'))
+          for path, methods in p.get('paths',{}).items():
+              if any(k in path.lower() for k in ('predict','call','upload','file')):
+                  print('PATH', path)
+                  for method,spec in methods.items():
+                      if isinstance(spec,dict):
+                          print(' ', method.upper(), spec.get('operationId'), spec.get('summary'))
+          PY
+          echo '=== CONFIG API NAMES ==='
+          curl -fsSL --max-time 60 "$BASE/config" -o /tmp/config.json
+          python3 - <<'PY'
+          import json
+          c=json.load(open('/tmp/config.json'))
+          print('version=',c.get('version'))
+          for d in c.get('dependencies',[]):
+              api=d.get('api_name')
+              if api:
+                  print('API',api,'inputs=',d.get('inputs'),'outputs=',d.get('outputs'),'queue=',d.get('queue'))
+          comps={x.get('id'):x for x in c.get('components',[])}
+          for d in c.get('dependencies',[]):
+              api=d.get('api_name')
+              if api:
+                  print('DETAIL',api)
+                  for i in d.get('inputs',[]):
+                      x=comps.get(i,{})
+                      print(' IN',i,x.get('type'),x.get('props',{}).get('label'))
+                  for i in d.get('outputs',[]):
+                      x=comps.get(i,{})
+                      print(' OUT',i,x.get('type'),x.get('props',{}).get('label'))
+          PY
