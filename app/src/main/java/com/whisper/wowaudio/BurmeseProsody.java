@@ -9,7 +9,7 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v7-final-human-reader";
+    static final String RENDER_VERSION = "burmese-prosody-v8-studio-reader";
     // Legacy CI marker: burmese-prosody-v5-human-cadence
 
     static final class Profile {
@@ -32,7 +32,7 @@ final class BurmeseProsody {
     private BurmeseProsody() { }
 
     static Profile neutral() {
-        return new Profile(1.0f, 1.0f, 0, 102, "Natural");
+        return new Profile(1.0f, 1.0f, 0, 106, "Natural");
     }
 
     static Profile analyze(String text, String readingStyle) {
@@ -40,7 +40,7 @@ final class BurmeseProsody {
         boolean structuralBreak = hasStructuralLineBreak(raw);
         String s = raw.trim();
         if (s.isEmpty()) return structuralBreak
-                ? new Profile(0.99f, 0.99f, 0, 320, "Line Break")
+                ? new Profile(0.995f, 0.998f, 0, 500, "Line Break")
                 : neutral();
 
         boolean geminiLike = VoiceSettings.STYLE_GEMINI_EXPRESSIVE.equals(readingStyle);
@@ -108,35 +108,35 @@ final class BurmeseProsody {
         int strongest = max(sadScore, tenseScore, calmScore, joyfulScore, angryScore, tenderScore);
         if (strongest > 0) {
             if (sadScore == strongest) {
-                speedDelta -= 0.045f;
-                pitchDelta -= 0.018f;
+                speedDelta -= 0.038f;
+                pitchDelta -= 0.010f;
                 pause += 58;
                 label = "Tender";
             } else if (calmScore == strongest) {
-                speedDelta -= 0.028f;
-                pitchDelta -= 0.009f;
+                speedDelta -= 0.026f;
+                pitchDelta -= 0.005f;
                 pause += 38;
                 label = "Calm";
             } else if (tenseScore == strongest) {
-                speedDelta += 0.020f;
-                pitchDelta += 0.008f;
+                speedDelta += 0.016f;
+                pitchDelta += 0.004f;
                 gain += 80;
                 pause = Math.max(70, pause - 10);
                 label = "Tense";
             } else if (joyfulScore == strongest) {
-                speedDelta += 0.016f;
-                pitchDelta += 0.013f;
+                speedDelta += 0.013f;
+                pitchDelta += 0.007f;
                 gain += 55;
                 label = "Bright";
             } else if (angryScore == strongest) {
-                speedDelta += 0.012f;
-                pitchDelta -= 0.004f;
+                speedDelta += 0.010f;
+                pitchDelta -= 0.002f;
                 gain += 105;
                 pause += 5;
                 label = "Firm";
             } else {
-                speedDelta -= 0.024f;
-                pitchDelta -= 0.008f;
+                speedDelta -= 0.021f;
+                pitchDelta -= 0.004f;
                 pause += 30;
                 label = "Warm";
             }
@@ -144,14 +144,14 @@ final class BurmeseProsody {
 
         if (question) {
             speedDelta -= 0.006f;
-            pitchDelta += quotedQuestion ? 0.021f : 0.016f;
+            pitchDelta += quotedQuestion ? 0.012f : 0.009f;
             pause += quotedQuestion ? 36 : 28;
             if ("Natural".equals(label)) label = "Question";
         }
         if (exclamation) {
             speedDelta += 0.010f;
-            pitchDelta += 0.010f;
-            gain += 55;
+            pitchDelta += 0.006f;
+            gain += 45;
             if ("Natural".equals(label)) label = "Emphasis";
         }
         if (ellipsis) {
@@ -160,42 +160,42 @@ final class BurmeseProsody {
             if ("Natural".equals(label)) label = "Reflective";
         }
         if (dialogue) {
-            pitchDelta += 0.006f;
-            pause += 10;
+            pitchDelta += 0.003f;
+            pause += 12;
             if ("Natural".equals(label)) label = "Dialogue";
         }
 
         if (sentenceEnd && !question && !exclamation && !ellipsis) {
-            speedDelta -= 0.010f;
-            pitchDelta -= 0.012f;
-            pause += 65;
+            speedDelta -= 0.009f;
+            pitchDelta -= 0.007f;
+            pause += 68;
             if ("Natural".equals(label)) label = "Sentence End";
         } else if (phraseEnd) {
-            speedDelta -= 0.005f;
-            pitchDelta -= 0.002f;
-            pause += 42;
+            speedDelta -= 0.004f;
+            pitchDelta -= 0.001f;
+            pause += 44;
             if ("Natural".equals(label)) label = "Phrase Pause";
         } else if (softBreath) {
             speedDelta -= 0.004f;
-            pause += 36;
+            pause += s.length() >= 165 ? 48 : 40;
             if ("Natural".equals(label)) label = "Breath";
         }
         if (paragraph) {
-            speedDelta -= 0.012f;
-            pitchDelta -= 0.010f;
-            pause += 115;
+            speedDelta -= 0.010f;
+            pitchDelta -= 0.006f;
+            pause += 120;
             if ("Natural".equals(label)) label = "Line Break";
         }
 
         float cueBoost = 1.0f + Math.min(0.22f, Math.max(0, strongest - 1) * 0.07f);
         if (geminiLike) {
-            cueBoost += 0.18f;
-            speedDelta *= 1.16f;
-            pitchDelta *= 1.20f;
-            gain = Math.round(gain * 1.20f);
+            cueBoost += 0.12f;
+            speedDelta *= 1.10f;
+            pitchDelta *= 1.08f;
+            gain = Math.round(gain * 1.12f);
             if (dialogue) {
-                pitchDelta += question ? 0.010f : 0.006f;
-                gain += 28;
+                pitchDelta += question ? 0.004f : 0.002f;
+                gain += 20;
             }
             if (ellipsis) pause += 28;
             if (paragraph) pause += 35;
@@ -212,24 +212,24 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        if (sentenceEnd) expressivePause = Math.max(expressivePause, 320);
-        if (phraseEnd) expressivePause = Math.max(expressivePause, 185);
-        if (softBreath) expressivePause = Math.max(expressivePause, 135);
-        if (paragraph) expressivePause = Math.max(expressivePause, 480);
+        if (sentenceEnd) expressivePause = Math.max(expressivePause, 330);
+        if (phraseEnd) expressivePause = Math.max(expressivePause, 190);
+        if (softBreath) expressivePause = Math.max(expressivePause, s.length() >= 165 ? 155 : 145);
+        if (paragraph) expressivePause = Math.max(expressivePause, 500);
 
-        // Final pass: human narration gets most of its expression from phrasing, breath and timing.
-        // Keep playback pitch extremely close to the neural voice's original timbre so Nilar/Thiha
-        // do not acquire a synthetic "processed" sound.
+        // Studio-reader pass: let the neural model supply the voice's natural intonation. Playback
+        // processing only adds a very small contour; phrasing, timing and breath placement carry
+        // the expression. This avoids the metallic/processed sound caused by broad pitch shifting.
         if (geminiLike) {
-            speed = clamp(speed, 0.925f, 1.055f);
-            pitch = clamp(pitch, 0.980f, 1.020f);
-            expressiveGain = clamp(expressiveGain, 0, 195);
-            expressivePause = clamp(expressivePause, 85, 560);
+            speed = clamp(speed, 0.930f, 1.050f);
+            pitch = clamp(pitch, 0.988f, 1.012f);
+            expressiveGain = clamp(expressiveGain, 0, 180);
+            expressivePause = clamp(expressivePause, 90, 590);
         } else {
-            speed = clamp(speed, 0.945f, 1.040f);
-            pitch = clamp(pitch, 0.985f, 1.015f);
-            expressiveGain = clamp(expressiveGain, 0, 150);
-            expressivePause = clamp(expressivePause, 75, 560);
+            speed = clamp(speed, 0.948f, 1.038f);
+            pitch = clamp(pitch, 0.991f, 1.009f);
+            expressiveGain = clamp(expressiveGain, 0, 140);
+            expressivePause = clamp(expressivePause, 80, 590);
         }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
@@ -267,14 +267,14 @@ final class BurmeseProsody {
     }
 
     private static int boundaryPause(String raw) {
-        if (hasStructuralLineBreak(raw)) return 480;
+        if (hasStructuralLineBreak(raw)) return 500;
         String value = stripClosingQuotes(raw.trim());
-        if (hasEllipsis(value)) return 390;
-        if (value.endsWith("?")) return 320;
-        if (value.endsWith("!")) return 270;
-        if (value.endsWith("။") || value.endsWith(".")) return 320;
-        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 185;
-        return 96;
+        if (hasEllipsis(value)) return 410;
+        if (value.endsWith("?")) return 330;
+        if (value.endsWith("!")) return 280;
+        if (value.endsWith("။") || value.endsWith(".")) return 330;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 190;
+        return 100;
     }
 
     private static boolean endsWithFullStop(String s) {

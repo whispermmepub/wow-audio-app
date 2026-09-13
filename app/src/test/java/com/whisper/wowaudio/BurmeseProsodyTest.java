@@ -61,26 +61,26 @@ public final class BurmeseProsodyTest {
         BurmeseProsody.Profile p = BurmeseProsody.analyze("သူ ပြန်လာခဲ့သည်။", VoiceSettings.STYLE_GEMINI_EXPRESSIVE);
         assertTrue(p.pitchMultiplier < 1.0f);
         assertTrue(p.speedMultiplier < 1.0f);
-        assertTrue(p.pauseAfterMs >= 320);
+        assertTrue(p.pauseAfterMs >= 330);
     }
 
     @Test public void structuralLineBreakGetsLongPause() {
         BurmeseProsody.Profile p = BurmeseProsody.analyze("အခန်း (၁)\n", VoiceSettings.STYLE_GEMINI_EXPRESSIVE);
-        assertTrue(p.pauseAfterMs >= 480);
+        assertTrue(p.pauseAfterMs >= 500);
         assertTrue(p.pitchMultiplier <= 1.0f);
     }
 
     @Test public void burmesePhraseCommaGetsAudibleBreath() {
         BurmeseProsody.Profile p = BurmeseProsody.analyze(
                 "သူက စာအုပ်ကိုယူပြီး၊", VoiceSettings.STYLE_AUTO);
-        assertTrue(p.pauseAfterMs >= 185);
+        assertTrue(p.pauseAfterMs >= 190);
     }
 
     @Test public void longUnpunctuatedClauseGetsSoftBreath() {
         String text = "ဒီစာပိုဒ်ဟာ ပုဒ်ဖြတ်ပုဒ်ရပ်မပါဘဲ အလွန်ရှည်လျားနေတဲ့အခါ လူတစ်ယောက် ဖတ်သလို အသက်ရှူချိန်လေး ရှိစေဖို့ စမ်းသပ်ထားတဲ့ မြန်မာစာပိုဒ်ရှည်တစ်ခု ဖြစ်ပါတယ်";
         BurmeseProsody.Profile p = BurmeseProsody.analyze(text, VoiceSettings.STYLE_AUTO);
-        assertTrue(p.pauseAfterMs >= 135);
-        assertTrue(p.pitchMultiplier >= 0.985f && p.pitchMultiplier <= 1.015f);
+        assertTrue(p.pauseAfterMs >= 145);
+        assertTrue(p.pitchMultiplier >= 0.991f && p.pitchMultiplier <= 1.009f);
     }
 
     @Test public void geminiDirectionIncludesPassageAwareGuidance() {

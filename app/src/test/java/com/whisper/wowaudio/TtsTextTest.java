@@ -50,6 +50,22 @@ public final class TtsTextTest {
         assertTrue(cleaned.contains("အဆုံး"));
     }
 
+    @Test public void removesFullWidthNNoiseAndTightensBurmesePunctuationSpacing() {
+        String input = "ပထမ Ｎ ဒုတိယ ｎ တတိယ  ။   နောက်တစ်ပိုဒ်  ၊  ဆက်ဖတ်မယ်။";
+        String cleaned = TtsText.normalizeForSpeech(input);
+        assertFalse(cleaned.contains("Ｎ"));
+        assertFalse(cleaned.contains("ｎ"));
+        assertFalse(cleaned.contains("  ။"));
+        assertFalse(cleaned.contains("  ၊"));
+    }
+
+    @Test public void naturalBurmeseConnectorCanBecomeBreathBoundary() {
+        String input = "သူက မနက်စောစောအိမ်ကထွက်လာပြီး လမ်းတစ်လျှောက်အေးအေးဆေးဆေးလျှောက်သွားကာ စာအုပ်ဆိုင်ရှေ့ကိုရောက်လာပြီး နောက်ထပ်ဘာလုပ်ရမလဲစဉ်းစားနေခဲ့သည်";
+        List<String> chunks = TtsText.chunks(input);
+        assertTrue(chunks.size() >= 2);
+        assertTrue(chunks.get(0).endsWith("ပြီး") || chunks.get(0).endsWith("ကာ"));
+    }
+
     @Test public void keepsLongNarrationInPhraseSizedChunks() {
         String sentence = "သူသည် တိတ်ဆိတ်သောလမ်းပေါ်တွင် ဖြည်းဖြည်းလျှောက်နေခဲ့သည်။ ";
         StringBuilder text = new StringBuilder();
@@ -57,7 +73,7 @@ public final class TtsTextTest {
         List<String> chunks = TtsText.chunks(text.toString());
         assertTrue(chunks.size() >= 3);
         for (int i = 1; i < chunks.size() - 1; i++) {
-            assertTrue(chunks.get(i).length() <= 195);
+            assertTrue(chunks.get(i).length() <= 182);
         }
     }
 

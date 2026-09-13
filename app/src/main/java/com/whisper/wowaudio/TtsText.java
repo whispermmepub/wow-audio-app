@@ -4,8 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class TtsText {
-    private static final int FIRST_MAX_CHARS = 132;
-    private static final int NEXT_MAX_CHARS = 190;
+    private static final int FIRST_MAX_CHARS = 128;
+    private static final int NEXT_MAX_CHARS = 178;
 
     private TtsText() { }
 
@@ -26,7 +26,7 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 28 : 46);
+            int end = findBreak(normalized, start, limit, first ? 26 : 42);
             if (end <= start) end = limit;
 
             String rawChunk = normalized.substring(start, end);
@@ -58,6 +58,8 @@ final class TtsText {
                 .replace("\u200C", "")
                 .replace("\u200D", "")
                 .replace("\uFEFF", "")
+                .replace('ｎ', 'n')
+                .replace('Ｎ', 'N')
                 .replace("\\r\\n", "\n")
                 .replace("\\n", "\n")
                 .replace("\\r", "\n")
@@ -71,7 +73,11 @@ final class TtsText {
         // NOT touching another ASCII letter/digit.
         s = s.replaceAll("(?im)^[ \\t]*(?:[nN]+[ \\t]*)+$", "")
                 .replaceAll("(?i)(?<![A-Za-z0-9])(?:[\\\\/|]+[ \\t]*)?[nN]+(?:[ \\t]+[nN]+)*(?:[ \\t]*[\\\\/|]+)?(?![A-Za-z0-9])", " ")
-                .replaceAll("(?i)(?<![A-Za-z0-9])[nN]+(?![A-Za-z0-9])", " ");
+                .replaceAll("(?i)(?<![A-Za-z0-9])[nN]+(?![A-Za-z0-9])", " ")
+                // Bad EPUB spacing often leaves a visual gap before Burmese punctuation. Remove
+                // that gap so the neural voice sees the punctuation as part of the phrase.
+                .replaceAll("[ \\t]+([။၊!?…])", "$1")
+                .replaceAll("([။၊!?…])[ \\t]{2,}", "$1 ");
 
         return clean(s);
     }
@@ -101,6 +107,12 @@ final class TtsText {
             if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
 
+        // If punctuation is missing, prefer a Burmese grammatical connector near the end of the
+        // phrase. Human readers naturally take a micro-breath after these connectors instead of
+        // cutting at an arbitrary character count.
+        int naturalBreak = naturalBurmesePhraseBreak(text, start, limit, floor);
+        if (naturalBreak > start) return naturalBreak;
+
         if (limit >= text.length()) return text.length();
 
         // If a long paragraph has no punctuation, make a soft breath at a word boundary
@@ -109,6 +121,25 @@ final class TtsText {
             if (Character.isWhitespace(text.charAt(i))) return i + 1;
         }
         return limit;
+    }
+
+    private static int naturalBurmesePhraseBreak(String text, int start, int limit, int floor) {
+        int safeFloor = Math.max(floor, Math.min(limit - 1, start + 72));
+        String[] cues = {
+                "ပြီးတော့", "သော်လည်း", "သော်ငြား", "သဖြင့်", "သောကြောင့်", "ကြောင့်",
+                "ဖြစ်၍", "နေစဉ်", "စဉ်", "အခါ", "ဆိုပြီး", "ဟု", "လို့", "ပြီး", "ကာ", "လျက်", "၍"
+        };
+        for (int i = limit - 1; i >= safeFloor; i--) {
+            if (!Character.isWhitespace(text.charAt(i))) continue;
+            int phraseEnd = i;
+            while (phraseEnd > start && Character.isWhitespace(text.charAt(phraseEnd - 1))) phraseEnd--;
+            int from = Math.max(start, phraseEnd - 28);
+            String tail = text.substring(from, phraseEnd).trim();
+            for (String cue : cues) {
+                if (tail.endsWith(cue)) return i + 1;
+            }
+        }
+        return -1;
     }
 
     private static boolean englishSentenceEnd(String text, int index) {

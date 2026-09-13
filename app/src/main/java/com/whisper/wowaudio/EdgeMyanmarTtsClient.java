@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * This is an unofficial consumer endpoint and can change. WoW Audio keeps it isolated behind
  * this class and always retains a fallback in ReadingService.
  *
- * Nilar / Thiha v5: keep synthesis itself conservative and human-like. Structural pauses are
+ * Nilar / Thiha v8: keep synthesis conservative and studio-reader natural. Structural pauses are
  * handled between short Burmese phrase chunks rather than injecting fragile SSML break tags.
  */
 final class EdgeMyanmarTtsClient implements AutoCloseable {
@@ -125,7 +125,7 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
 
                     // A tiny baseline slowdown gives the Burmese voices room to articulate without
                     // sounding dragged. Thiha also benefits from a very small pitch settling.
-                    int voiceRateOffset = VOICE_NILAR.equals(voice) ? -2 : -1;
+                    int voiceRateOffset = VOICE_NILAR.equals(voice) ? -3 : -2;
                     int percent = Math.round((speed - 1.0f) * 100f) + voiceRateOffset;
                     String rate = (percent >= 0 ? "+" : "") + percent + "%";
                     String pitch = "+0Hz";
