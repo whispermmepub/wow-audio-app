@@ -1,0 +1,96 @@
+name: Final WoW Audio v1.9.1 macOS Build
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/final-v1.9.1-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.9.0-aung-gyi-f5-local
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android 16 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
+      - name: Fetch pinned offline Burmese fallback
+        shell: bash
+        run: bash tools/fetch_offline_tts.sh
+      - name: Verify final studio-reader source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "versionCode 16" app/build.gradle
+          grep -q "versionName '1.9.1'" app/build.gradle
+          grep -q 'burmese-prosody-v8-studio-reader' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
+          grep -q 'naturalBurmesePhraseBreak' app/src/main/java/com/whisper/wowaudio/TtsText.java
+          grep -q 'my-MM-NilarNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          grep -q 'my-MM-ThihaNeural' app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java
+          git diff --check
+      - name: Unit tests build and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:testDebugUnitTest --tests com.whisper.wowaudio.TtsTextTest --tests com.whisper.wowaudio.BurmeseProsodyTest --stacktrace
+          gradle :app:assembleDebug :app:assembleRelease :app:lintRelease --stacktrace
+      - name: Verify APK identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort | tail -n 1)
+          DEBUG=app/build/outputs/apk/debug/app-debug.apk
+          RELEASE=app/build/outputs/apk/release/app-release-unsigned.apk
+          "$AAPT" dump badging "$DEBUG" | grep -q "package: name='com.whisper.wowaudio.f5test'"
+          "$AAPT" dump badging "$DEBUG" | grep -q "versionCode='16'"
+          "$AAPT" dump badging "$DEBUG" | grep -q "versionName='1.9.1'"
+          "$AAPT" dump badging "$RELEASE" | grep -q "package: name='com.whisper.wowaudio'"
+          "$AAPT" dump badging "$RELEASE" | grep -q "versionCode='16'"
+          "$AAPT" dump badging "$RELEASE" | grep -q "versionName='1.9.1'"
+          unzip -l "$RELEASE" | grep -q 'assets/tts/mya/model.onnx'
+          unzip -l "$RELEASE" | grep -q 'lib/arm64-v8a/libsherpa-onnx-jni.so'
+      - name: Export apksigner jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNER_JAR=$(find "$ANDROID_HOME/build-tools" -type f -path '*/lib/apksigner.jar' | sort | tail -n 1)
+          test -s "$SIGNER_JAR"
+          cp "$SIGNER_JAR" /tmp/apksigner.jar
+      - name: Upload fresh side-by-side APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.9.1-FINAL-FRESH-side-by-side
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+          if-no-files-found: error
+      - name: Upload unsigned production APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.9.1-FINAL-production-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 3
+          if-no-files-found: error
+      - name: Upload apksigner
+        uses: actions/upload-artifact@v4
+        with:
+          name: WoW-Audio-v1.9.1-apksigner
+          path: /tmp/apksigner.jar
+          retention-days: 1
+          if-no-files-found: error
