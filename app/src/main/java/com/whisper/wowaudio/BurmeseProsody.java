@@ -9,7 +9,7 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v6-burmese-breath";
+    static final String RENDER_VERSION = "burmese-prosody-v7-final-human-reader";
     // Legacy CI marker: burmese-prosody-v5-human-cadence
 
     static final class Profile {
@@ -32,7 +32,7 @@ final class BurmeseProsody {
     private BurmeseProsody() { }
 
     static Profile neutral() {
-        return new Profile(1.0f, 1.0f, 0, 96, "Natural");
+        return new Profile(1.0f, 1.0f, 0, 102, "Natural");
     }
 
     static Profile analyze(String text, String readingStyle) {
@@ -212,24 +212,24 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        if (sentenceEnd) expressivePause = Math.max(expressivePause, 290);
-        if (phraseEnd) expressivePause = Math.max(expressivePause, 175);
-        if (softBreath) expressivePause = Math.max(expressivePause, 125);
-        if (paragraph) expressivePause = Math.max(expressivePause, 440);
+        if (sentenceEnd) expressivePause = Math.max(expressivePause, 320);
+        if (phraseEnd) expressivePause = Math.max(expressivePause, 185);
+        if (softBreath) expressivePause = Math.max(expressivePause, 135);
+        if (paragraph) expressivePause = Math.max(expressivePause, 480);
 
-        // Preserve the native Nilar/Thiha timbre. Large MediaPlayer pitch shifts were one of the
-        // main things that made the voices sound synthetic, so v6 gets expression mostly from
-        // timing, phrasing, speed and restrained gain instead of artificial pitch bending.
+        // Final pass: human narration gets most of its expression from phrasing, breath and timing.
+        // Keep playback pitch extremely close to the neural voice's original timbre so Nilar/Thiha
+        // do not acquire a synthetic "processed" sound.
         if (geminiLike) {
-            speed = clamp(speed, 0.920f, 1.065f);
-            pitch = clamp(pitch, 0.970f, 1.035f);
-            expressiveGain = clamp(expressiveGain, 0, 210);
-            expressivePause = clamp(expressivePause, 80, 520);
+            speed = clamp(speed, 0.925f, 1.055f);
+            pitch = clamp(pitch, 0.980f, 1.020f);
+            expressiveGain = clamp(expressiveGain, 0, 195);
+            expressivePause = clamp(expressivePause, 85, 560);
         } else {
-            speed = clamp(speed, 0.940f, 1.045f);
-            pitch = clamp(pitch, 0.980f, 1.025f);
-            expressiveGain = clamp(expressiveGain, 0, 160);
-            expressivePause = clamp(expressivePause, 70, 520);
+            speed = clamp(speed, 0.945f, 1.040f);
+            pitch = clamp(pitch, 0.985f, 1.015f);
+            expressiveGain = clamp(expressiveGain, 0, 150);
+            expressivePause = clamp(expressivePause, 75, 560);
         }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
@@ -267,14 +267,14 @@ final class BurmeseProsody {
     }
 
     private static int boundaryPause(String raw) {
-        if (hasStructuralLineBreak(raw)) return 440;
+        if (hasStructuralLineBreak(raw)) return 480;
         String value = stripClosingQuotes(raw.trim());
-        if (hasEllipsis(value)) return 360;
-        if (value.endsWith("?")) return 300;
-        if (value.endsWith("!")) return 255;
-        if (value.endsWith("။") || value.endsWith(".")) return 290;
-        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 175;
-        return 90;
+        if (hasEllipsis(value)) return 390;
+        if (value.endsWith("?")) return 320;
+        if (value.endsWith("!")) return 270;
+        if (value.endsWith("။") || value.endsWith(".")) return 320;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 185;
+        return 96;
     }
 
     private static boolean endsWithFullStop(String s) {

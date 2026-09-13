@@ -263,7 +263,10 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
             else out.appendCodePoint(cp);
         }
         return out.toString()
-                .replaceAll("(?i)(?<![A-Za-z0-9])n(?![A-Za-z0-9])", " ")
+                // Last-line defence: even if another caller bypasses TtsText, no standalone/run
+                // n/N artefact may be sent to the online Burmese voice. English words are protected.
+                .replaceAll("(?i)(?<![A-Za-z0-9])(?:[\\\\/|]+\\s*)?[nN]+(?:\\s+[nN]+)*(?:\\s*[\\\\/|]+)?(?![A-Za-z0-9])", " ")
+                .replaceAll("(?i)(?<![A-Za-z0-9])[nN]+(?![A-Za-z0-9])", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
     }

@@ -4,8 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class TtsText {
-    private static final int FIRST_MAX_CHARS = 140;
-    private static final int NEXT_MAX_CHARS = 215;
+    private static final int FIRST_MAX_CHARS = 132;
+    private static final int NEXT_MAX_CHARS = 190;
 
     private TtsText() { }
 
@@ -26,7 +26,7 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 32 : 54);
+            int end = findBreak(normalized, start, limit, first ? 28 : 46);
             if (end <= start) end = limit;
 
             String rawChunk = normalized.substring(start, end);
@@ -65,11 +65,13 @@ final class TtsText {
                 .replace("\r\n", "\n")
                 .replace('\r', '\n');
 
-        // EPUB/HTML conversion noise seen in some books: n, N, "n n", "။ n", "(n)" etc.
-        // Remove a Latin n only when it is a standalone token. ASCII words/numbers are protected.
-        s = s.replaceAll("(?im)^[ \\t]*(?:[nN][ \\t]+){1,}[nN][ \\t]*$", "")
-                .replaceAll("(?im)^[ \\t]*[nN][ \\t]*$", "")
-                .replaceAll("(?i)(?<![A-Za-z0-9])n(?![A-Za-z0-9])", " ");
+        // EPUB/HTML conversion noise seen in real books can be n, N, nn, NNN, n n, /n, \ n,
+        // punctuation-wrapped n, or an n glued directly to Myanmar text. None of those may reach TTS.
+        // Normal English words remain protected because an artefact run is removed only when it is
+        // NOT touching another ASCII letter/digit.
+        s = s.replaceAll("(?im)^[ \\t]*(?:[nN]+[ \\t]*)+$", "")
+                .replaceAll("(?i)(?<![A-Za-z0-9])(?:[\\\\/|]+[ \\t]*)?[nN]+(?:[ \\t]+[nN]+)*(?:[ \\t]*[\\\\/|]+)?(?![A-Za-z0-9])", " ")
+                .replaceAll("(?i)(?<![A-Za-z0-9])[nN]+(?![A-Za-z0-9])", " ");
 
         return clean(s);
     }

@@ -41,6 +41,15 @@ public final class TtsTextTest {
         assertTrue(cleaned.contains("Nilar"));
     }
 
+    @Test public void removesEveryStandaloneOrRepeatedNArtifactShape() {
+        String input = "အစ။ n nn NNN /n \\ n n n မြန်မာစာn ၊N။ အဆုံး။";
+        String cleaned = TtsText.normalizeForSpeech(input);
+        assertFalse(cleaned.matches("(?s).*(?<![A-Za-z0-9])[nN]+(?![A-Za-z0-9]).*"));
+        assertTrue(cleaned.contains("အစ"));
+        assertTrue(cleaned.contains("မြန်မာစာ"));
+        assertTrue(cleaned.contains("အဆုံး"));
+    }
+
     @Test public void keepsLongNarrationInPhraseSizedChunks() {
         String sentence = "သူသည် တိတ်ဆိတ်သောလမ်းပေါ်တွင် ဖြည်းဖြည်းလျှောက်နေခဲ့သည်။ ";
         StringBuilder text = new StringBuilder();
@@ -48,7 +57,7 @@ public final class TtsTextTest {
         List<String> chunks = TtsText.chunks(text.toString());
         assertTrue(chunks.size() >= 3);
         for (int i = 1; i < chunks.size() - 1; i++) {
-            assertTrue(chunks.get(i).length() <= 220);
+            assertTrue(chunks.get(i).length() <= 195);
         }
     }
 
