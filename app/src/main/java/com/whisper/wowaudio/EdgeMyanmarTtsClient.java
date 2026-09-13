@@ -30,10 +30,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * open-source edge-tts clients. It needs Internet, but no user account or app API key.
  *
  * This is an unofficial consumer endpoint and can change. WoW Audio keeps it isolated behind
- * this class and always retains an offline fallback in ReadingService.
+ * this class and always retains a fallback in ReadingService.
  *
- * v1.4.2 regression fix: the experimental SSML break time='220ms' path was intentionally removed
- * because the previously proven plain escaped-text path starts Nilar / Thiha faster and more reliably.
+ * Nilar / Thiha v5: keep synthesis itself conservative and human-like. Structural pauses are
+ * handled between short Burmese phrase chunks rather than injecting fragile SSML break tags.
  */
 final class EdgeMyanmarTtsClient implements AutoCloseable {
     static final String VOICE_NILAR = "my-MM-NilarNeural";
@@ -123,10 +123,14 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
                             + "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
                     if (!ws.send(config)) throw new IOException("Could not send speech configuration.");
 
-                    int percent = Math.round((speed - 1.0f) * 100f);
+                    // A tiny baseline slowdown gives the Burmese voices room to articulate without
+                    // sounding dragged. Thiha also benefits from a very small pitch settling.
+                    int voiceRateOffset = VOICE_NILAR.equals(voice) ? -2 : -1;
+                    int percent = Math.round((speed - 1.0f) * 100f) + voiceRateOffset;
                     String rate = (percent >= 0 ? "+" : "") + percent + "%";
+                    String pitch = VOICE_THIHA.equals(voice) ? "-1Hz" : "+0Hz";
                     String ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'>"
-                            + "<voice name='" + voice + "'><prosody pitch='+0Hz' rate='" + rate
+                            + "<voice name='" + voice + "'><prosody pitch='" + pitch + "' rate='" + rate
                             + "' volume='+0%'>" + escapeXml(text) + "</prosody></voice></speak>";
                     String speech = "X-RequestId:" + randomId() + "\r\n"
                             + "Content-Type:application/ssml+xml\r\n"
@@ -247,14 +251,21 @@ final class EdgeMyanmarTtsClient implements AutoCloseable {
 
     private static String cleanInput(String value) {
         if (value == null) return "";
-        StringBuilder out = new StringBuilder(value.length());
-        for (int i = 0; i < value.length();) {
-            int cp = value.codePointAt(i);
+        // TtsText owns EPUB cleanup. Real newlines are useful to the local pause engine but must
+        // never be passed to the network voice. A second n/N guard here prevents any future caller
+        // from bypassing the main cleanup path.
+        String normalized = TtsText.normalizeForSpeech(value).replace('\n', ' ');
+        StringBuilder out = new StringBuilder(normalized.length());
+        for (int i = 0; i < normalized.length();) {
+            int cp = normalized.codePointAt(i);
             i += Character.charCount(cp);
             if ((cp >= 0 && cp <= 8) || (cp >= 11 && cp <= 12) || (cp >= 14 && cp <= 31)) out.append(' ');
             else out.appendCodePoint(cp);
         }
-        return out.toString().trim();
+        return out.toString()
+                .replaceAll("(?i)(?<![A-Za-z0-9])n(?![A-Za-z0-9])", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private static String escapeXml(String value) {
