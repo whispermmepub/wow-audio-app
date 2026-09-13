@@ -28,6 +28,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Keep the F5 field-test build installable beside the user's permanently-signed WoW Audio.
+            // Release builds keep the real com.whisper.wowaudio package unchanged.
+            applicationIdSuffix '.f5test'
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
