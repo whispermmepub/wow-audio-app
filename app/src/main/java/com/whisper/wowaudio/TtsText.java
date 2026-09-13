@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class TtsText {
-    private static final int FIRST_MAX_CHARS = 170;
-    private static final int NEXT_MAX_CHARS = 360;
+    private static final int FIRST_MAX_CHARS = 155;
+    private static final int NEXT_MAX_CHARS = 300;
 
     private TtsText() { }
 
     /**
-     * Keep first speech fast, then use shorter phrase-focused chunks so narration can react to
-     * Burmese punctuation and structural line breaks without changing the TTS provider.
+     * Keep first speech fast, then use phrase-focused chunks so narration follows Burmese
+     * punctuation and structural line breaks without changing the TTS provider.
      */
     static List<String> chunks(String text) {
         List<String> out = new ArrayList<>();
@@ -26,16 +26,15 @@ final class TtsText {
 
             int max = first ? FIRST_MAX_CHARS : NEXT_MAX_CHARS;
             int limit = Math.min(length, start + max);
-            int end = findBreak(normalized, start, limit, first ? 42 : 80);
+            int end = findBreak(normalized, start, limit, first ? 36 : 68);
             if (end <= start) end = limit;
 
             String rawChunk = normalized.substring(start, end);
             boolean structuralBreak = rawChunk.indexOf('\n') >= 0;
             String chunk = clean(rawChunk);
             if (!chunk.isEmpty() && containsMyanmar(chunk)) {
-                // Preserve an invisible structural cue for the playback prosody layer. The Edge
-                // client trims it before synthesis, so it is never spoken, but it lets the service
-                // distinguish a heading/paragraph boundary from an ordinary text split.
+                // Preserve an internal structural cue for the playback prosody layer only. The
+                // Edge client removes this real newline before synthesis, so it can never be spoken.
                 if (structuralBreak) chunk = chunk + "\n";
                 out.add(chunk);
                 first = false;
@@ -46,10 +45,10 @@ final class TtsText {
     }
 
     /**
-     * Normalizes text once before every voice engine sees it. Some EPUB generators store escaped
-     * line endings (\\n / \\r / \\t) or stray runs such as "n n n n" in text nodes. Escaped line
-     * endings are converted to REAL newlines so heading/body boundaries can become audible pauses.
-     * Isolated n filler is removed, but its surrounding structural newlines are preserved.
+     * Normalize EPUB text before every voice engine sees it. EPUB generators sometimes leave
+     * escaped line endings (\\n / \\r / \\t) or stray Latin n tokens in text nodes. Escaped line
+     * endings become REAL newlines for pause detection. Standalone n/N noise is removed everywhere
+     * while normal English words such as China, Internet and Nilar remain untouched.
      */
     static String normalizeForSpeech(String value) {
         if (value == null) return "";
@@ -66,12 +65,11 @@ final class TtsText {
                 .replace("\r\n", "\n")
                 .replace('\r', '\n');
 
-        // Remove malformed EPUB filler that consists only of isolated Latin n tokens. Keep the
-        // line itself empty rather than replacing it with a space; this preserves a heading/body
-        // or paragraph boundary for the pause engine.
+        // EPUB/HTML conversion noise seen in some books: n, N, "n n", "။ n", "(n)" etc.
+        // Remove a Latin n only when it is a standalone token. ASCII words/numbers are protected.
         s = s.replaceAll("(?im)^[ \\t]*(?:[nN][ \\t]+){1,}[nN][ \\t]*$", "")
                 .replaceAll("(?im)^[ \\t]*[nN][ \\t]*$", "")
-                .replaceAll("(?i)(?<![A-Za-z])n(?:[ \\t]+n){1,}(?![A-Za-z])", " ");
+                .replaceAll("(?i)(?<![A-Za-z0-9])n(?![A-Za-z0-9])", " ");
 
         return clean(s);
     }
@@ -80,8 +78,7 @@ final class TtsText {
         if (start >= limit) return limit;
         int floor = Math.min(limit - 1, start + Math.max(18, minChars));
 
-        // Structural newlines must not be swallowed. They are hard reading boundaries, even for
-        // a short heading, so heading/body text cannot run together.
+        // Paragraph/heading breaks are hard boundaries. Keep headings separate from body text.
         for (int i = start; i + 1 < limit; i++) {
             if (text.charAt(i) == '\n' && text.charAt(i + 1) == '\n') return i + 2;
         }
@@ -89,23 +86,19 @@ final class TtsText {
             if (text.charAt(i) == '\n') return i + 1;
         }
 
-        // Full Burmese sentence endings are hard boundaries. A short sentence must still stop at
-        // '။' rather than run into the next sentence, including when the whole remaining text is
-        // shorter than the nominal chunk size.
+        // Burmese sentence endings are hard boundaries even for short sentences.
         for (int i = start; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '။' || c == '!' || c == '?' || c == '…') return includeClosingQuotes(text, i + 1, limit);
             if (c == '.' && englishSentenceEnd(text, i)) return includeClosingQuotes(text, i + 1, limit);
         }
 
-        // Burmese phrase comma also deserves a short breath, even in a short phrase.
+        // Burmese phrase comma gets a smaller breath and should not be swallowed by a long chunk.
         for (int i = start; i < limit; i++) {
             char c = text.charAt(i);
             if (c == '၊' || c == ',' || c == ';' || c == ':') return includeClosingQuotes(text, i + 1, limit);
         }
 
-        // If the rest of the text already fits, keep it as the final segment after checking every
-        // meaningful boundary above.
         if (limit >= text.length()) return text.length();
 
         // Only arbitrary whitespace splitting keeps the minimum-length guard.
