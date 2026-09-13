@@ -11,11 +11,12 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.zip.ZipFile;
 
 /**
  * Local-only F5 Myanmar custom voice pack descriptor and safe importer.
@@ -45,6 +46,7 @@ final class F5MyanmarVoicePack {
     static final String REFERENCE_TEXT = "အင်နာကာရနီနာကို ဘာသာပြန်ဖြစ်ခြင်း အကြောင်းကြောင်းများ";
 
     private static final long MAX_PACK_BYTES = 360L * 1024L * 1024L;
+    private static final long MAX_ARCHIVE_BYTES = 380L * 1024L * 1024L;
     private static final long MAX_REFERENCE_BYTES = 4L * 1024L * 1024L;
 
     private static final Map<String, String> EXPECTED_SHA256 = new HashMap<>();
@@ -102,70 +104,100 @@ final class F5MyanmarVoicePack {
         return "ready";
     }
 
+    /**
+     * Import through ZipFile rather than ZipInputStream.
+     *
+     * GitHub Actions artifacts can contain STORED entries that use data descriptors. Some Android
+     * ZipInputStream implementations stream those large entries incorrectly even though the central
+     * directory and payload are valid, which causes a false SHA-256 failure (seen on F5_Decode.onnx).
+     * Copying the selected document to an app-private temporary file and opening it with ZipFile
+     * makes extraction use the central directory, so both STORED and DEFLATED artifact ZIPs work.
+     */
     static void installModelZip(Context context, Uri uri) throws Exception {
         if (context == null || uri == null) throw new IllegalArgumentException("Missing model pack.");
+
         File root = root(context);
-        File incoming = new File(root.getParentFile(), ".aung-gyi-import");
+        File parent = root.getParentFile();
+        if (parent == null) throw new IllegalStateException("Could not prepare voice-pack storage.");
+        if (!parent.exists() && !parent.mkdirs()) {
+            throw new IllegalStateException("Could not prepare voice-pack storage.");
+        }
+
+        File incoming = new File(parent, ".aung-gyi-import");
+        File archiveFile = new File(parent, ".aung-gyi-model.zip");
         deleteRecursively(incoming);
+        //noinspection ResultOfMethodCallIgnored
+        archiveFile.delete();
         if (!incoming.mkdirs()) throw new IllegalStateException("Could not prepare voice-pack storage.");
 
-        long total = 0L;
-        byte[] buffer = new byte[128 * 1024];
-        try (InputStream raw = context.getContentResolver().openInputStream(uri)) {
-            if (raw == null) throw new IllegalArgumentException("Could not open selected model pack.");
-            try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw, 128 * 1024))) {
-                ZipEntry entry;
-                while ((entry = zip.getNextEntry()) != null) {
+        try {
+            try (InputStream raw = context.getContentResolver().openInputStream(uri)) {
+                if (raw == null) throw new IllegalArgumentException("Could not open selected model pack.");
+                copy(raw, archiveFile, MAX_ARCHIVE_BYTES);
+            }
+
+            Map<String, ZipEntry> entries = new HashMap<>();
+            try (ZipFile zip = new ZipFile(archiveFile)) {
+                Enumeration<? extends ZipEntry> all = zip.entries();
+                while (all.hasMoreElements()) {
+                    ZipEntry entry = all.nextElement();
                     if (entry.isDirectory()) continue;
                     String name = new File(entry.getName()).getName();
                     if (!EXPECTED_SHA256.containsKey(name)) continue;
+                    if (entries.put(name, entry) != null) {
+                        throw new IllegalArgumentException("Model pack contains duplicate " + name);
+                    }
+                }
+
+                long extracted = 0L;
+                for (Map.Entry<String, String> expected : EXPECTED_SHA256.entrySet()) {
+                    String name = expected.getKey();
+                    ZipEntry entry = entries.get(name);
+                    if (entry == null) {
+                        throw new IllegalArgumentException("Model pack is missing " + name);
+                    }
+                    long declared = entry.getSize();
+                    if (declared > MAX_PACK_BYTES) {
+                        throw new IllegalArgumentException("Model file is too large: " + name);
+                    }
+
                     File out = new File(incoming, name);
-                    try (BufferedOutputStream fileOut = new BufferedOutputStream(new FileOutputStream(out), 128 * 1024)) {
-                        int n;
-                        while ((n = zip.read(buffer)) != -1) {
-                            total += n;
-                            if (total > MAX_PACK_BYTES) throw new IllegalArgumentException("Voice model pack is too large.");
-                            fileOut.write(buffer, 0, n);
-                        }
+                    try (InputStream in = zip.getInputStream(entry)) {
+                        extracted += copyEntry(in, out, MAX_PACK_BYTES - extracted);
+                    }
+                    if (extracted > MAX_PACK_BYTES) {
+                        throw new IllegalArgumentException("Voice model pack is too large.");
+                    }
+
+                    String actual = sha256(out);
+                    if (!expected.getValue().equals(actual)) {
+                        throw new SecurityException("Model verification failed for " + name
+                                + " (expected " + shortHash(expected.getValue())
+                                + ", got " + shortHash(actual) + ")");
                     }
                 }
             }
-        } catch (Throwable t) {
-            deleteRecursively(incoming);
-            throw t;
-        }
 
-        for (Map.Entry<String, String> expected : EXPECTED_SHA256.entrySet()) {
-            File file = new File(incoming, expected.getKey());
-            if (!file.isFile()) {
-                deleteRecursively(incoming);
-                throw new IllegalArgumentException("Model pack is missing " + expected.getKey());
+            if (!root.exists() && !root.mkdirs()) {
+                throw new IllegalStateException("Could not create voice-pack directory.");
             }
-            String actual = sha256(file);
-            if (!expected.getValue().equals(actual)) {
-                deleteRecursively(incoming);
-                throw new SecurityException("Model verification failed for " + expected.getKey());
+            for (String name : EXPECTED_SHA256.keySet()) {
+                File src = new File(incoming, name);
+                File dst = new File(root, name);
+                if (dst.exists() && !dst.delete()) {
+                    throw new IllegalStateException("Could not replace " + name);
+                }
+                if (!src.renameTo(dst)) {
+                    copy(src, dst, MAX_PACK_BYTES);
+                    //noinspection ResultOfMethodCallIgnored
+                    src.delete();
+                }
             }
-        }
-
-        if (!root.exists() && !root.mkdirs()) {
+        } finally {
             deleteRecursively(incoming);
-            throw new IllegalStateException("Could not create voice-pack directory.");
+            //noinspection ResultOfMethodCallIgnored
+            archiveFile.delete();
         }
-        for (String name : EXPECTED_SHA256.keySet()) {
-            File src = new File(incoming, name);
-            File dst = new File(root, name);
-            if (dst.exists() && !dst.delete()) {
-                deleteRecursively(incoming);
-                throw new IllegalStateException("Could not replace " + name);
-            }
-            if (!src.renameTo(dst)) {
-                copy(src, dst, MAX_PACK_BYTES);
-                //noinspection ResultOfMethodCallIgnored
-                src.delete();
-            }
-        }
-        deleteRecursively(incoming);
     }
 
     static void installReferenceWav(Context context, Uri uri) throws Exception {
@@ -206,6 +238,21 @@ final class F5MyanmarVoicePack {
         }
     }
 
+    private static long copyEntry(InputStream in, File dst, long maxBytes) throws Exception {
+        if (maxBytes <= 0L) throw new IllegalArgumentException("Voice model pack is too large.");
+        byte[] buffer = new byte[128 * 1024];
+        long total = 0L;
+        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(dst), 128 * 1024)) {
+            int n;
+            while ((n = in.read(buffer)) != -1) {
+                total += n;
+                if (total > maxBytes) throw new IllegalArgumentException("Voice model pack is too large.");
+                out.write(buffer, 0, n);
+            }
+        }
+        return total;
+    }
+
     private static void copy(File src, File dst, long maxBytes) throws Exception {
         try (InputStream in = new FileInputStream(src)) { copy(in, dst, maxBytes); }
     }
@@ -233,6 +280,10 @@ final class F5MyanmarVoicePack {
         StringBuilder out = new StringBuilder(64);
         for (byte b : digest.digest()) out.append(String.format(Locale.US, "%02x", b & 0xff));
         return out.toString();
+    }
+
+    private static String shortHash(String value) {
+        return value == null || value.length() < 12 ? String.valueOf(value) : value.substring(0, 12) + "…";
     }
 
     private static boolean valid(File file, long minBytes) {
