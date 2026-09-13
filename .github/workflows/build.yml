@@ -74,8 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
-          grep -q "applicationIdSuffix '.f5test'" app/build.gradle
-          grep -q "minSdk 24" app/build.gradle
+          grep -q "applicationIdSuffix '.standalone'" app/build.gradle
+          grep -q "minSdk 23" app/build.gradle
           grep -q "versionCode 16" app/build.gradle
           grep -q "versionName '1.9.1'" app/build.gradle
           grep -q 'burmese-prosody-v8-studio-reader' app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java
@@ -109,10 +109,10 @@ jobs:
           set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
-          "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio.f5test'"
+          "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio.standalone'"
           "$AAPT" dump badging "$APK" | grep -q "versionCode='16'"
           "$AAPT" dump badging "$APK" | grep -q "versionName='1.9.1'"
-          "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'24'"
+          "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'23'"
           "$AAPT" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
           unzip -l "$APK" | grep -q 'assets/tts/mya/model.onnx'
           unzip -l "$APK" | grep -q 'assets/tts/mya/tokens.txt'
@@ -151,7 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
-          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.9.1-FINAL-signed.apk
+          SIGNED=app/build/outputs/apk/release/WoW-Audio-v1.9.1-Nilar-Thiha-UPDATE.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$APKSIGNER" sign --ks /tmp/WoW-Audio-update-key.jks --ks-key-alias "$WOW_AUDIO_KEY_ALIAS" --ks-pass env:WOW_AUDIO_STORE_PASSWORD --key-pass env:WOW_AUDIO_KEY_PASSWORD --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$SIGNED" "$UNSIGNED"
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED" | tee /tmp/apksigner.txt
@@ -161,15 +161,15 @@ jobs:
         if: env.WOW_AUDIO_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.1-FINAL-signed
-          path: app/build/outputs/apk/release/WoW-Audio-v1.9.1-FINAL-signed.apk
+          name: WoW-Audio-v1.9.1-Nilar-Thiha-UPDATE
+          path: app/build/outputs/apk/release/WoW-Audio-v1.9.1-Nilar-Thiha-UPDATE.apk
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload side-by-side final test APK
+      - name: Upload standalone final APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.1-FINAL-side-by-side-test
+          name: WoW-Audio-v1.9.1-Nilar-Thiha-STANDALONE
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
@@ -177,7 +177,7 @@ jobs:
       - name: Upload unsigned production release
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.1-FINAL-release-unsigned
+          name: WoW-Audio-v1.9.1-Nilar-Thiha-release-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 3
           if-no-files-found: error
