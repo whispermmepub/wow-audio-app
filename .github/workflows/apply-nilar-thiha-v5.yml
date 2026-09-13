@@ -1,4 +1,4 @@
-name: Apply Nilar Thiha Audiobook v6
+name: Apply Nilar Thiha Audiobook v7
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feature/v1.9.0-aung-gyi-f5-local
-      - name: Apply v6 cadence patch
+      - name: Apply v7 final human-reader patch
         run: python3 tools/apply_nilar_thiha_v5.py
       - name: Validate
         run: git diff --check
@@ -30,11 +30,12 @@ jobs:
           git add app/src/main/java/com/whisper/wowaudio/TtsText.java \
                   app/src/main/java/com/whisper/wowaudio/BurmeseProsody.java \
                   app/src/main/java/com/whisper/wowaudio/EdgeMyanmarTtsClient.java \
+                  app/src/main/java/com/whisper/wowaudio/SpeechCache.java \
                   app/src/test/java/com/whisper/wowaudio/TtsTextTest.java \
                   app/src/test/java/com/whisper/wowaudio/BurmeseProsodyTest.java
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
-            git commit -m 'Make Burmese punctuation pauses clearly audible'
+            git commit -m 'Finalize Nilar Thiha human cadence and remove n noise'
             git push origin HEAD:feature/v1.9.0-aung-gyi-f5-local
           fi
