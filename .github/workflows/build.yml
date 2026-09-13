@@ -74,6 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q "applicationId 'com.whisper.wowaudio'" app/build.gradle
+          grep -q "applicationIdSuffix '.f5test'" app/build.gradle
           grep -q "minSdk 24" app/build.gradle
           grep -q "versionCode 15" app/build.gradle
           grep -q "versionName '1.9.0'" app/build.gradle
@@ -84,6 +85,7 @@ jobs:
           grep -q 'STYLE_GEMINI_EXPRESSIVE' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
           grep -q 'ENGINE_F5' app/src/main/java/com/whisper/wowaudio/VoiceSettings.java
           grep -q 'F5LocalTtsEngine' app/src/main/java/com/whisper/wowaudio/AudiobookService.java
+          grep -q 'HuggingFaceF5Client' app/src/main/java/com/whisper/wowaudio/F5LocalTtsEngine.java
           grep -q 'onnxruntime-android:1.29.0' app/build.gradle
           grep -q 'VIEW_SMALL_LIST' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
           grep -q 'VIEW_SMALL_GRID' app/src/main/java/com/whisper/wowaudio/LibraryActivity.java
@@ -111,7 +113,7 @@ jobs:
           set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
-          "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio'"
+          "$AAPT" dump badging "$APK" | grep -q "package: name='com.whisper.wowaudio.f5test'"
           "$AAPT" dump badging "$APK" | grep -q "versionCode='15'"
           "$AAPT" dump badging "$APK" | grep -q "versionName='1.9.0'"
           "$AAPT" dump badging "$APK" | grep -q "sdkVersion:'24'"
@@ -168,10 +170,10 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload v1.9.0 test APK
+      - name: Upload v1.9.0 side-by-side test APK
         uses: actions/upload-artifact@v4
         with:
-          name: WoW-Audio-v1.9.0-Aung-Gyi-test
+          name: WoW-Audio-v1.9.0-Aung-Gyi-side-by-side-test
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3
           if-no-files-found: error
