@@ -9,7 +9,7 @@ import java.util.Locale;
  * so there are no extra network calls and no fragile SSML break injection.
  */
 final class BurmeseProsody {
-    static final String RENDER_VERSION = "burmese-prosody-v4-pause-boundaries";
+    static final String RENDER_VERSION = "burmese-prosody-v5-human-cadence";
 
     static final class Profile {
         final float speedMultiplier;
@@ -31,7 +31,7 @@ final class BurmeseProsody {
     private BurmeseProsody() { }
 
     static Profile neutral() {
-        return new Profile(1.0f, 1.0f, 0, 105, "Natural");
+        return new Profile(1.0f, 1.0f, 0, 78, "Natural");
     }
 
     static Profile analyze(String text, String readingStyle) {
@@ -205,9 +205,9 @@ final class BurmeseProsody {
         int expressiveGain = Math.round(gain * intensity * cueBoost);
         int expressivePause = basePause + Math.round((pause - basePause) * Math.max(0.30f, intensity));
 
-        if (sentenceEnd) expressivePause = Math.max(expressivePause, 190);
-        if (phraseEnd) expressivePause = Math.max(expressivePause, 115);
-        if (paragraph) expressivePause = Math.max(expressivePause, 320);
+        if (sentenceEnd) expressivePause = Math.max(expressivePause, 230);
+        if (phraseEnd) expressivePause = Math.max(expressivePause, 110);
+        if (paragraph) expressivePause = Math.max(expressivePause, 360);
 
         if (geminiLike) {
             speed = clamp(speed, 0.900f, 1.080f);
@@ -218,7 +218,7 @@ final class BurmeseProsody {
             speed = clamp(speed, 0.925f, 1.055f);
             pitch = clamp(pitch, 0.950f, 1.045f);
             expressiveGain = clamp(expressiveGain, 0, 180);
-            expressivePause = clamp(expressivePause, 70, 360);
+            expressivePause = clamp(expressivePause, 55, 420);
         }
         return new Profile(speed, pitch, expressiveGain, expressivePause, label);
     }
@@ -256,13 +256,14 @@ final class BurmeseProsody {
     }
 
     private static int boundaryPause(String raw) {
-        if (hasStructuralLineBreak(raw)) return 320;
+        if (hasStructuralLineBreak(raw)) return 360;
         String value = stripClosingQuotes(raw.trim());
-        if (hasEllipsis(value)) return 205;
-        if (value.endsWith("?") || value.endsWith("!")) return 175;
-        if (value.endsWith("။") || value.endsWith(".")) return 190;
-        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 115;
-        return 95;
+        if (hasEllipsis(value)) return 290;
+        if (value.endsWith("?")) return 225;
+        if (value.endsWith("!")) return 190;
+        if (value.endsWith("။") || value.endsWith(".")) return 230;
+        if (value.endsWith("၊") || value.endsWith(",") || value.endsWith(";") || value.endsWith(":")) return 110;
+        return 72;
     }
 
     private static boolean endsWithFullStop(String s) {

@@ -101,11 +101,9 @@ public final class SettingsActivity extends Activity {
         edgeEngine = radio("WoW Natural • Nilar / Thiha");
         geminiEngine = radio("Google Gemini TTS • your API key");
         offlineEngine = radio("Offline Burmese backup");
-        f5Engine = radio("F5 Myanmar • Default (Online)");
         engineGroup.addView(edgeEngine);
         engineGroup.addView(geminiEngine);
         engineGroup.addView(offlineEngine);
-        engineGroup.addView(f5Engine);
         root.addView(engineGroup, marginTop(8));
 
         root.addView(section("WoW Natural Voice"), marginTop(20));
@@ -117,22 +115,6 @@ public final class SettingsActivity extends Activity {
         edgeVoiceGroup.addView(thihaVoice, new RadioGroup.LayoutParams(0, -2, 1f));
         root.addView(edgeVoiceGroup, marginTop(8));
         root.addView(body("Nilar / Thiha က API key မလိုပါ။ စာအုပ်စာသားကို အသံမထွက်ခင် သန့်စင်ပြီး မြန်မာစာ ဝါကျဖြတ်ပုံနဲ့ pause ကို ပိုသဘာဝကျအောင် ချိန်ထားပါတယ်။ Generate ပြီးသားအသံကို စာအုပ်အလိုက် cache သိမ်းထားပါတယ်။"), marginTop(6));
-
-        root.addView(section("Optional Custom Voice Files • အောင်ကြီး"), marginTop(22));
-        f5Status = body("");
-        root.addView(f5Status, marginTop(5));
-        LinearLayout f5Actions = new LinearLayout(this);
-        f5Actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button importModel = secondary("Import Model ZIP");
-        importModel.setOnClickListener(v -> pickF5Model());
-        f5Actions.addView(importModel, new LinearLayout.LayoutParams(0, dp(56), 1f));
-        Button importVoice = secondary("Import Voice WAV");
-        importVoice.setOnClickListener(v -> pickF5Reference());
-        LinearLayout.LayoutParams f5vp = new LinearLayout.LayoutParams(0, dp(56), 1f);
-        f5vp.leftMargin = dp(8);
-        f5Actions.addView(importVoice, f5vp);
-        root.addView(f5Actions, marginTop(10));
-        root.addView(body("F5 Myanmar • Default ကို သုံးဖို့ ZIP/WAV မလိုပါ။ Internet ရှိရင် public F5 Myanmar service က default Burmese voice ထုတ်ပေးပါတယ်။ အောက်က Model ZIP / Voice WAV က အောင်ကြီး custom voice စမ်းသပ်မှုအတွက် optional အဖြစ်သာ သိမ်းထားပါတယ်။"), marginTop(8));
 
         root.addView(section("Gemini Natural Voice"), marginTop(22));
         keyStatus = body("");
@@ -182,7 +164,6 @@ public final class SettingsActivity extends Activity {
     private void load() {
         String engine = VoiceSettings.engine(this);
         if (VoiceSettings.ENGINE_GEMINI.equals(engine)) geminiEngine.setChecked(true);
-        else if (VoiceSettings.ENGINE_F5.equals(engine)) f5Engine.setChecked(true);
         else if (VoiceSettings.ENGINE_OFFLINE.equals(engine)) offlineEngine.setChecked(true);
         else edgeEngine.setChecked(true);
 
@@ -208,7 +189,6 @@ public final class SettingsActivity extends Activity {
         try {
             String engine;
             if (geminiEngine.isChecked()) engine = VoiceSettings.ENGINE_GEMINI;
-            else if (f5Engine.isChecked()) engine = VoiceSettings.ENGINE_F5;
             else if (offlineEngine.isChecked()) engine = VoiceSettings.ENGINE_OFFLINE;
             else engine = VoiceSettings.ENGINE_EDGE;
             VoiceSettings.setEngine(this, engine);
