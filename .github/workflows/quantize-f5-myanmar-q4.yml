@@ -159,4 +159,5 @@ jobs:
           name: WoW-Audio-F5-Myanmar-Q4-NONCOMMERCIAL
           path: /tmp/f5-q4/
           retention-days: 7
-          compression-level: 0
+          # DEFLATE avoids GitHub's STORED+descriptor ZIP format, which Android ZipInputStream rejects.
+          compression-level: 1
