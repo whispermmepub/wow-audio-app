@@ -1,0 +1,132 @@
+name: Test F5 Myanmar Default Voice API
+
+on:
+  push:
+    branches:
+      - feature/v1.9.0-aung-gyi-f5-local
+    paths:
+      - '.github/workflows/test-f5-default-api.yml'
+  workflow_dispatch:
+
+jobs:
+  test-default:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Test public F5 Myanmar without reference voice
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://freococo-f5-myanmar-tts-demo.hf.space'
+          TEXT='မင်္ဂလာပါ။ မြန်မာစာကို သဘာဝကျကျ ဖတ်ပြပါ။'
+
+          python3 - <<'PY'
+          import json
+          text='မင်္ဂလာပါ။ မြန်မာစာကို သဘာဝကျကျ ဖတ်ပြပါ။'
+          variants = {
+              'null_ref': {'text': text, 'ref_audio': None, 'ref_text': '', 'speed': 1.0},
+              'omit_ref': {'text': text, 'ref_text': '', 'speed': 1.0},
+              'empty_ref': {'text': text, 'ref_audio': '', 'ref_text': '', 'speed': 1.0},
+          }
+          for name,payload in variants.items():
+              with open(f'/tmp/{name}.json','w',encoding='utf-8') as f:
+                  json.dump(payload,f,ensure_ascii=False)
+          PY
+
+          success=0
+          for variant in null_ref omit_ref empty_ref; do
+            echo "=== TRY $variant ==="
+            set +e
+            response=$(curl -sS --max-time 60 \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json' \
+              --data-binary @/tmp/${variant}.json \
+              "$BASE/gradio_api/call/v2/generate_speech")
+            curl_status=$?
+            set -e
+            echo "POST_STATUS=$curl_status"
+            echo "POST_RESPONSE=$response"
+            if [ "$curl_status" -ne 0 ]; then
+              continue
+            fi
+
+            event_id=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("event_id", ""))' "$response" 2>/dev/null || true)
+            if [ -z "$event_id" ]; then
+              echo "NO_EVENT_ID"
+              continue
+            fi
+
+            echo "EVENT_ID=$event_id"
+            set +e
+            result=$(curl -sS --max-time 300 \
+              -H 'Accept: text/event-stream' \
+              "$BASE/gradio_api/call/generate_speech/$event_id")
+            result_status=$?
+            set -e
+            echo "RESULT_STATUS=$result_status"
+            echo "SSE_BEGIN"
+            echo "$result"
+            echo "SSE_END"
+            if [ "$result_status" -ne 0 ]; then
+              continue
+            fi
+
+            printf '%s' "$result" > /tmp/${variant}.sse
+            url=$(python3 - "$BASE" /tmp/${variant}.sse <<'PY'
+          import json,sys
+          base=sys.argv[1]
+          raw=open(sys.argv[2],encoding='utf-8',errors='replace').read().replace('\r\n','\n')
+          event=''
+          data=[]
+          for line in raw.splitlines():
+              if line.startswith('event:'):
+                  event=line[6:].strip()
+              elif line.startswith('data:'):
+                  payload=line[5:].strip()
+                  if event=='complete':
+                      try:
+                          arr=json.loads(payload)
+                          first=arr[0] if arr else None
+                          if isinstance(first,dict):
+                              u=(first.get('url') or '').strip()
+                              if not u:
+                                  p=(first.get('path') or '').strip()
+                                  if p:
+                                      u=base+'/gradio_api/file='+p
+                              if u and not u.startswith(('http://','https://')):
+                                  u=base.rstrip('/')+'/'+u.lstrip('/')
+                              print(u)
+                              raise SystemExit
+                          if isinstance(first,str):
+                              u=first
+                              if u and not u.startswith(('http://','https://')):
+                                  u=base.rstrip('/')+'/'+u.lstrip('/')
+                              print(u)
+                              raise SystemExit
+                      except Exception:
+                          pass
+          print('')
+          PY
+          )
+            echo "OUTPUT_URL=$url"
+            if [ -z "$url" ]; then
+              continue
+            fi
+
+            if curl -fL --max-time 120 "$url" -o /tmp/f5-default-audio; then
+              bytes=$(stat -c%s /tmp/f5-default-audio)
+              echo "DOWNLOADED_BYTES=$bytes"
+              file /tmp/f5-default-audio || true
+              sha256sum /tmp/f5-default-audio || true
+              if [ "$bytes" -gt 1000 ]; then
+                echo "F5_DEFAULT_SUCCESS_VARIANT=$variant"
+                success=1
+                break
+              fi
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "F5_DEFAULT_NO_REFERENCE_NOT_AVAILABLE"
+            exit 1
+          fi
