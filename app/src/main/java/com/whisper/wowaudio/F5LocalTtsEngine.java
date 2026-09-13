@@ -7,16 +7,15 @@ import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Crash-safe bridge for the experimental Aung Gyi/F5 voice slot.
+ * Crash-safe Aung Gyi/F5 voice bridge.
  *
- * The current Q4 F5 ONNX runtime can terminate the Android process inside native ONNX Runtime on
- * some phones before Java can catch an exception. Until the F5 runtime is moved to an isolated
- * process, never enter that native path from the main audiobook service. This bridge guarantees
- * audible playback instead: Gemini TTS is tried when the user already has a key, then the bundled
- * Burmese offline engine is used as the no-network fallback.
+ * The local Q4 ONNX runtime can terminate the Android process inside native ONNX Runtime on some
+ * phones. To keep playback reliable, this class does not enter that unsafe native path from the
+ * main audiobook process. It first calls the public F5 Myanmar Space with the user's imported
+ * reference WAV, which preserves the actual cloned Aung Gyi timbre. If the Space is unavailable,
+ * playback still falls back to saved Gemini TTS and finally the bundled Burmese offline engine.
  *
- * The imported F5 model pack and private reference WAV remain untouched in app-private storage so
- * the real Aung Gyi timbre can be re-enabled once the native runtime is isolated/proven safe.
+ * The imported Q4 model stays installed for a future isolated-process local runtime.
  */
 final class F5LocalTtsEngine implements AutoCloseable {
     static final class Audio {
@@ -30,6 +29,7 @@ final class F5LocalTtsEngine implements AutoCloseable {
     }
 
     private final Context appContext;
+    private final HuggingFaceF5Client onlineF5 = new HuggingFaceF5Client();
     private final GeminiTtsClient gemini = new GeminiTtsClient();
     private MmsMyanmarTtsEngine offline;
     private volatile boolean closed;
@@ -48,11 +48,30 @@ final class F5LocalTtsEngine implements AutoCloseable {
         String clean = text == null ? "" : text.trim();
         if (clean.isEmpty()) throw new IllegalArgumentException("No text to synthesize.");
 
-        // Safe online path first. Gemini emits mono PCM16 WAV, so it can be converted directly to
-        // the Audio object expected by the existing cache writer without touching MediaPlayer.
+        // 1) Real F5 Myanmar zero-shot cloning online. This uses the imported Aung Gyi WAV and
+        // matching transcript, so unlike generic fallbacks it preserves the selected voice.
+        File onlineTemp = new File(appContext.getCacheDir(), "aung-gyi-f5-online.wav");
+        try {
+            onlineF5.synthesizeToFile(
+                    clean,
+                    F5MyanmarVoicePack.referenceAudio(appContext),
+                    F5MyanmarVoicePack.REFERENCE_TEXT,
+                    1.0f,
+                    onlineTemp);
+            Audio cloned = readWav(onlineTemp);
+            //noinspection ResultOfMethodCallIgnored
+            onlineTemp.delete();
+            if (cloned.samples.length > 0) return cloned;
+        } catch (Throwable ignored) {
+            // Network queue/cold-start/service errors must never close the audiobook app.
+            //noinspection ResultOfMethodCallIgnored
+            onlineTemp.delete();
+        }
+
+        // 2) Existing Gemini key, when available, gives a high-quality online Burmese fallback.
         String apiKey = SecureApiKeyStore.getGeminiKey(appContext);
         if (apiKey != null && !apiKey.trim().isEmpty()) {
-            File temp = new File(appContext.getCacheDir(), "aung-gyi-safe-online.wav");
+            File temp = new File(appContext.getCacheDir(), "aung-gyi-safe-gemini.wav");
             try {
                 gemini.synthesizeToFile(
                         clean,
@@ -61,18 +80,17 @@ final class F5LocalTtsEngine implements AutoCloseable {
                         VoiceSettings.geminiVoice(appContext),
                         VoiceSettings.effectiveGeminiStyle(appContext),
                         temp);
-                Audio online = readPcm16MonoWav(temp);
+                Audio online = readWav(temp);
                 //noinspection ResultOfMethodCallIgnored
                 temp.delete();
                 if (online.samples.length > 0) return online;
             } catch (Throwable ignored) {
-                // Network/quota/model errors must never stop audiobook playback. Fall through to
-                // the bundled Burmese engine, which is already covered by the app's CI smoke test.
                 //noinspection ResultOfMethodCallIgnored
                 temp.delete();
             }
         }
 
+        // 3) Last-resort no-network Burmese audio. The app CI smoke-tests this engine.
         if (offline == null) offline = new MmsMyanmarTtsEngine(appContext);
         MmsMyanmarTtsEngine.Audio generated = offline.synthesize(clean, 1.0f);
         if (generated == null || generated.samples == null || generated.samples.length == 0) {
@@ -81,7 +99,8 @@ final class F5LocalTtsEngine implements AutoCloseable {
         return new Audio(generated.samples, generated.sampleRate);
     }
 
-    private static Audio readPcm16MonoWav(File file) throws Exception {
+    /** Read common PCM/float WAV output into mono float samples. */
+    private static Audio readWav(File file) throws Exception {
         try (RandomAccessFile in = new RandomAccessFile(file, "r")) {
             if (in.length() < 44) throw new IllegalArgumentException("Generated WAV is too short.");
             if (!"RIFF".equals(readAscii(in, 4))) throw new IllegalArgumentException("Generated audio is not RIFF WAV.");
@@ -98,7 +117,7 @@ final class F5LocalTtsEngine implements AutoCloseable {
             while (in.getFilePointer() + 8 <= in.length()) {
                 String chunk = readAscii(in, 4);
                 int size = readLe32(in);
-                if (size < 0 || in.getFilePointer() + size > in.length()) {
+                if (size < 0 || in.getFilePointer() + (long) size > in.length()) {
                     throw new IllegalArgumentException("Malformed generated WAV.");
                 }
                 long start = in.getFilePointer();
@@ -106,8 +125,8 @@ final class F5LocalTtsEngine implements AutoCloseable {
                     format = readLe16(in);
                     channels = readLe16(in);
                     sampleRate = readLe32(in);
-                    readLe32(in);
-                    readLe16(in);
+                    readLe32(in); // byte rate
+                    readLe16(in); // block align
                     bits = readLe16(in);
                 } else if ("data".equals(chunk)) {
                     dataOffset = start;
@@ -116,22 +135,49 @@ final class F5LocalTtsEngine implements AutoCloseable {
                 in.seek(start + size + (size & 1));
             }
 
-            if (format != 1 || channels != 1 || bits != 16 || sampleRate < 8000
-                    || sampleRate > 96000 || dataOffset < 0 || dataSize <= 0) {
-                throw new IllegalArgumentException("Generated WAV must be mono PCM16 audio.");
+            if ((format != 1 && format != 3) || channels < 1 || channels > 2
+                    || sampleRate < 8000 || sampleRate > 96000 || dataOffset < 0 || dataSize <= 0) {
+                throw new IllegalArgumentException("Unsupported generated WAV format.");
             }
-
-            int count = dataSize / 2;
-            float[] samples = new float[count];
+            int bytesPerSample = bits / 8;
+            if (bytesPerSample <= 0 || (format == 3 && bits != 32)
+                    || (format == 1 && bits != 16 && bits != 24 && bits != 32)) {
+                throw new IllegalArgumentException("Unsupported generated WAV bit depth.");
+            }
+            int frameBytes = bytesPerSample * channels;
+            int frames = dataSize / frameBytes;
+            if (frames <= 0) throw new IllegalArgumentException("Generated WAV contains no samples.");
+            float[] samples = new float[frames];
             in.seek(dataOffset);
-            for (int i = 0; i < count; i++) {
-                int lo = in.readUnsignedByte();
-                int hi = in.readUnsignedByte();
-                short pcm = (short) ((hi << 8) | lo);
-                samples[i] = pcm / 32768.0f;
+            for (int frame = 0; frame < frames; frame++) {
+                float sum = 0f;
+                for (int ch = 0; ch < channels; ch++) {
+                    sum += readSample(in, format, bits);
+                }
+                samples[frame] = Math.max(-1f, Math.min(1f, sum / channels));
             }
             return new Audio(samples, sampleRate);
         }
+    }
+
+    private static float readSample(RandomAccessFile in, int format, int bits) throws Exception {
+        if (format == 3 && bits == 32) {
+            return Float.intBitsToFloat(readLe32(in));
+        }
+        if (bits == 16) {
+            int lo = in.readUnsignedByte();
+            int hi = in.readUnsignedByte();
+            short pcm = (short) ((hi << 8) | lo);
+            return pcm / 32768.0f;
+        }
+        if (bits == 24) {
+            int value = in.readUnsignedByte()
+                    | (in.readUnsignedByte() << 8)
+                    | (in.readUnsignedByte() << 16);
+            if ((value & 0x800000) != 0) value |= 0xff000000;
+            return value / 8388608.0f;
+        }
+        return readLe32(in) / 2147483648.0f;
     }
 
     private static String readAscii(RandomAccessFile in, int count) throws Exception {
@@ -157,6 +203,7 @@ final class F5LocalTtsEngine implements AutoCloseable {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
+        try { onlineF5.close(); } catch (Throwable ignored) { }
         try { gemini.close(); } catch (Throwable ignored) { }
         if (offline != null) {
             try { offline.close(); } catch (Throwable ignored) { }
