@@ -24,10 +24,21 @@ public final class TtsTextTest {
         }
     }
 
+    @Test public void removesSingleStandaloneNNoiseAnywhereInBurmeseText() {
+        String input = "ပထမစာကြောင်း။ n ဒုတိယစာကြောင်း၊ (N) တတိယစာကြောင်း။";
+        String cleaned = TtsText.normalizeForSpeech(input);
+        assertTrue(cleaned.contains("ပထမစာကြောင်း"));
+        assertTrue(cleaned.contains("ဒုတိယစာကြောင်း"));
+        assertTrue(cleaned.contains("တတိယစာကြောင်း"));
+        assertFalse(cleaned.matches("(?s).*(?<![A-Za-z0-9])[nN](?![A-Za-z0-9]).*"));
+    }
+
     @Test public void preservesNormalEnglishInsideMyanmarText() {
-        String input = "မြန်မာစာနဲ့ China Dream ဆိုတဲ့ English စကားလုံးကို ထိန်းထားမယ်။";
+        String input = "မြန်မာစာနဲ့ China Dream, Internet နဲ့ Nilar ဆိုတဲ့ English စကားလုံးတွေကို ထိန်းထားမယ်။";
         String cleaned = TtsText.normalizeForSpeech(input);
         assertTrue(cleaned.contains("China Dream"));
+        assertTrue(cleaned.contains("Internet"));
+        assertTrue(cleaned.contains("Nilar"));
     }
 
     @Test public void keepsLongNarrationInPhraseSizedChunks() {
@@ -37,7 +48,7 @@ public final class TtsTextTest {
         List<String> chunks = TtsText.chunks(text.toString());
         assertTrue(chunks.size() >= 3);
         for (int i = 1; i < chunks.size() - 1; i++) {
-            assertTrue(chunks.get(i).length() <= 365);
+            assertTrue(chunks.get(i).length() <= 305);
         }
     }
 
