@@ -8,7 +8,7 @@ android {
 
     defaultConfig {
         applicationId 'com.whisper.wowaudio'
-        minSdk 24
+        minSdk 23
         targetSdk 36
         versionCode 16
         versionName '1.9.1'
@@ -29,9 +29,9 @@ android {
 
     buildTypes {
         debug {
-            // Test builds stay installable beside the permanently-signed production WoW Audio.
-            // Release builds keep the real com.whisper.wowaudio package unchanged.
-            applicationIdSuffix '.f5test'
+            // Standalone builds can coexist with the permanently-signed production WoW Audio.
+            // Release builds keep the real com.whisper.wowaudio package unchanged for in-place updates.
+            applicationIdSuffix '.standalone'
         }
         release {
             minifyEnabled false
