@@ -40,6 +40,33 @@ final class HuggingFaceF5Client implements AutoCloseable {
 
     private String uploadedReferencePath;
 
+    File synthesizeDefaultToFile(String text, float speed, File target) throws Exception {
+        String cleanText = TtsText.normalizeForSpeech(text);
+        if (cleanText.isEmpty()) throw new IllegalArgumentException("No readable text for F5 Myanmar voice.");
+        float safeSpeed = Math.max(0.7f, Math.min(1.5f, speed));
+
+        Throwable first = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                String eventId = startGeneration(cleanText, null, "", safeSpeed);
+                String outputUrl = awaitOutputUrl(eventId);
+                download(outputUrl, target);
+                if (!target.isFile() || target.length() < 1000L) {
+                    throw new IOException("F5 Myanmar default voice returned empty audio.");
+                }
+                return target;
+            } catch (Throwable problem) {
+                if (first == null) first = problem;
+                if (attempt == 1) {
+                    if (problem instanceof Exception) throw (Exception) problem;
+                    throw new IOException(problem);
+                }
+            }
+        }
+        if (first instanceof Exception) throw (Exception) first;
+        throw new IOException("F5 Myanmar default voice failed.");
+    }
+
     File synthesizeToFile(String text, File referenceWav, String referenceText,
                           float speed, File target) throws Exception {
         String cleanText = TtsText.normalizeForSpeech(text);
@@ -105,13 +132,16 @@ final class HuggingFaceF5Client implements AutoCloseable {
 
     private String startGeneration(String text, String referencePath,
                                    String referenceText, float speed) throws Exception {
-        JSONObject fileData = new JSONObject()
-                .put("path", referencePath)
-                .put("meta", new JSONObject().put("_type", "gradio.FileData"));
+        Object refAudio = JSONObject.NULL;
+        if (referencePath != null && !referencePath.trim().isEmpty()) {
+            refAudio = new JSONObject()
+                    .put("path", referencePath)
+                    .put("meta", new JSONObject().put("_type", "gradio.FileData"));
+        }
         JSONObject payload = new JSONObject()
                 .put("text", text)
-                .put("ref_audio", fileData)
-                .put("ref_text", referenceText)
+                .put("ref_audio", refAudio)
+                .put("ref_text", referenceText == null ? "" : referenceText)
                 .put("speed", speed);
         Request request = new Request.Builder()
                 .url(BASE + "/gradio_api/call/v2/generate_speech")

@@ -264,7 +264,7 @@ final class VoiceSettings {
     static String engineLabel(Context context) {
         String engine = engine(context);
         if (ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice(context);
-        if (ENGINE_F5.equals(engine)) return F5MyanmarVoicePack.DISPLAY_NAME_AUNG_GYI + " • Local";
+        if (ENGINE_F5.equals(engine)) return "F5 Myanmar • Default";
         if (ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
         String edge = EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice(context)) ? "Thiha" : "Nilar";
         if (STYLE_GEMINI_EXPRESSIVE.equals(readingStyle(context))) return edge + " • Gemini-like";

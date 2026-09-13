@@ -101,7 +101,7 @@ public final class SettingsActivity extends Activity {
         edgeEngine = radio("WoW Natural • Nilar / Thiha");
         geminiEngine = radio("Google Gemini TTS • your API key");
         offlineEngine = radio("Offline Burmese backup");
-        f5Engine = radio("အောင်ကြီး • Local Custom Voice");
+        f5Engine = radio("F5 Myanmar • Default (Online)");
         engineGroup.addView(edgeEngine);
         engineGroup.addView(geminiEngine);
         engineGroup.addView(offlineEngine);
@@ -118,7 +118,7 @@ public final class SettingsActivity extends Activity {
         root.addView(edgeVoiceGroup, marginTop(8));
         root.addView(body("Nilar / Thiha က API key မလိုပါ။ စာအုပ်စာသားကို အသံမထွက်ခင် သန့်စင်ပြီး မြန်မာစာ ဝါကျဖြတ်ပုံနဲ့ pause ကို ပိုသဘာဝကျအောင် ချိန်ထားပါတယ်။ Generate ပြီးသားအသံကို စာအုပ်အလိုက် cache သိမ်းထားပါတယ်။"), marginTop(6));
 
-        root.addView(section("Local Custom Voice • အောင်ကြီး"), marginTop(22));
+        root.addView(section("Optional Custom Voice Files • အောင်ကြီး"), marginTop(22));
         f5Status = body("");
         root.addView(f5Status, marginTop(5));
         LinearLayout f5Actions = new LinearLayout(this);
@@ -132,7 +132,7 @@ public final class SettingsActivity extends Activity {
         f5vp.leftMargin = dp(8);
         f5Actions.addView(importVoice, f5vp);
         root.addView(f5Actions, marginTop(10));
-        root.addView(body("အောင်ကြီးက server/API မလိုဘဲ ဖုန်းထဲမှာပဲ ONNX Runtime နဲ့ အသံထုတ်ပါတယ်။ ပထမတစ်ကြိမ် Q4 model ZIP နဲ့ ကိုယ်ပိုင်/ခွင့်ပြုထားတဲ့ reference WAV ကို import လုပ်ရပါမယ်။ Model နဲ့ voice sample ကို app-private storage ထဲသာ သိမ်းပါတယ်။"), marginTop(8));
+        root.addView(body("F5 Myanmar • Default ကို သုံးဖို့ ZIP/WAV မလိုပါ။ Internet ရှိရင် public F5 Myanmar service က default Burmese voice ထုတ်ပေးပါတယ်။ အောက်က Model ZIP / Voice WAV က အောင်ကြီး custom voice စမ်းသပ်မှုအတွက် optional အဖြစ်သာ သိမ်းထားပါတယ်။"), marginTop(8));
 
         root.addView(section("Gemini Natural Voice"), marginTop(22));
         keyStatus = body("");
@@ -211,10 +211,6 @@ public final class SettingsActivity extends Activity {
             else if (f5Engine.isChecked()) engine = VoiceSettings.ENGINE_F5;
             else if (offlineEngine.isChecked()) engine = VoiceSettings.ENGINE_OFFLINE;
             else engine = VoiceSettings.ENGINE_EDGE;
-            if (VoiceSettings.ENGINE_F5.equals(engine) && !F5MyanmarVoicePack.isInstalled(this)) {
-                showMessage("အောင်ကြီး voice မပြည့်စုံသေးပါ", "Model ZIP နဲ့ reference WAV နှစ်ခုလုံးကို အရင် import လုပ်ပါ။\n\n" + F5MyanmarVoicePack.status(this));
-                return;
-            }
             VoiceSettings.setEngine(this, engine);
             VoiceSettings.setEdgeVoice(this,
                     thihaVoice.isChecked() ? EdgeMyanmarTtsClient.VOICE_THIHA : EdgeMyanmarTtsClient.VOICE_NILAR);

@@ -110,7 +110,7 @@ public final class AudiobookService extends Service {
 
         String label() {
             if (VoiceSettings.ENGINE_GEMINI.equals(engine)) return "Gemini • " + geminiVoice;
-            if (VoiceSettings.ENGINE_F5.equals(engine)) return F5MyanmarVoicePack.DISPLAY_NAME_AUNG_GYI + " • Local";
+            if (VoiceSettings.ENGINE_F5.equals(engine)) return "F5 Myanmar • Default";
             if (VoiceSettings.ENGINE_OFFLINE.equals(engine)) return "Offline Burmese";
             return EdgeMyanmarTtsClient.VOICE_THIHA.equals(edgeVoice) ? "Thiha" : "Nilar";
         }
@@ -320,22 +320,37 @@ public final class AudiobookService extends Service {
             Throwable primaryFailure = null;
 
             if (VoiceSettings.ENGINE_F5.equals(profile.engine)) {
-                if (!F5MyanmarVoicePack.isInstalled(this)) {
-                    throw new IllegalStateException("အောင်ကြီး voice needs the Q4 model ZIP and private reference WAV. Open Settings to import them.");
-                }
-                File local = AudioCache.f5(book, index, text);
-                if (local.isFile() && local.length() > 44) return local;
+                File f5 = AudioCache.f5(book, index, text);
+                if (f5.isFile() && f5.length() > 44) return f5;
                 if (allowFallback) {
-                    broadcast("Generating အောင်ကြီး locally…", false);
-                    updateNotification("Local voice • အောင်ကြီး…", false);
+                    broadcast("Getting F5 Myanmar default voice…", false);
+                    updateNotification("F5 Myanmar • Default…", false);
                 }
-                AudioCache.ensureParent(local);
-                F5LocalTtsEngine.Audio generated = f5Engine().synthesize(this, text);
-                if (generated == null || generated.samples == null || generated.samples.length == 0) {
-                    throw new IllegalStateException("အောင်ကြီး local voice produced no audio.");
+                AudioCache.ensureParent(f5);
+                try {
+                    F5LocalTtsEngine.Audio generated = f5Engine().synthesize(this, text);
+                    if (generated == null || generated.samples == null || generated.samples.length == 0) {
+                        throw new IllegalStateException("F5 Myanmar default voice produced no audio.");
+                    }
+                    WavFile.writeMonoPcm16(f5, generated.samples, generated.sampleRate);
+                    return f5;
+                } catch (Throwable f5Failure) {
+                    if (!allowFallback) return null;
+                    File edge = AudioCache.edge(book, index, profile.edgeVoice, profile.speed, text);
+                    if (edge.isFile() && edge.length() > 1024) return edge;
+                    try {
+                        broadcast("F5 unavailable • using WoW Natural", false);
+                        updateNotification("WoW Natural fallback • " + edgeLabel(profile.edgeVoice), false);
+                        AudioCache.ensureParent(edge);
+                        edgeTts.synthesizeToFile(text, profile.edgeVoice, profile.speed, edge);
+                        return edge;
+                    } catch (Throwable edgeFailure) {
+                        throw new IllegalStateException(
+                                "F5 Myanmar failed: " + safeMessage(f5Failure)
+                                        + "; WoW Natural failed: " + safeMessage(edgeFailure),
+                                f5Failure);
+                    }
                 }
-                WavFile.writeMonoPcm16(local, generated.samples, generated.sampleRate);
-                return local;
             }
 
             if (VoiceSettings.ENGINE_GEMINI.equals(profile.engine)) {

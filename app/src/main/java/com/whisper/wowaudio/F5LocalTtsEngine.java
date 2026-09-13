@@ -7,15 +7,12 @@ import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Crash-safe Aung Gyi/F5 voice bridge.
+ * Crash-safe F5 Myanmar default voice bridge.
  *
- * The local Q4 ONNX runtime can terminate the Android process inside native ONNX Runtime on some
- * phones. This class therefore never enters any native fallback path. It first calls the public
- * F5 Myanmar Space with the user's imported reference WAV, then tries the user's Gemini TTS key
- * when available. If both network paths fail, it throws back to AudiobookService, which can use
- * the normal non-native Edge Myanmar fallback without taking the app process down.
- *
- * The imported Q4 model stays installed for a future isolated-process local runtime.
+ * The public F5 Myanmar Space can synthesize its base/default Burmese voice with ref_audio=null.
+ * This keeps the experimental native ONNX path out of the audiobook process and requires no model
+ * ZIP or reference WAV. Gemini remains an optional safe online backup; the service then has a
+ * non-native WoW Natural fallback if both are unavailable.
  */
 final class F5LocalTtsEngine implements AutoCloseable {
     static final class Audio {
@@ -35,10 +32,6 @@ final class F5LocalTtsEngine implements AutoCloseable {
 
     F5LocalTtsEngine(Context context) {
         if (context == null) throw new IllegalArgumentException("Missing Android context.");
-        if (!F5MyanmarVoicePack.isInstalled(context)) {
-            throw new IllegalStateException("အောင်ကြီး voice is not installed: "
-                    + F5MyanmarVoicePack.missingReason(context));
-        }
         appContext = context.getApplicationContext();
     }
 
@@ -49,21 +42,15 @@ final class F5LocalTtsEngine implements AutoCloseable {
 
         Throwable f5Failure = null;
 
-        // 1) Real F5 Myanmar zero-shot cloning online. This uses the imported Aung Gyi WAV and
-        // matching transcript, so unlike generic fallbacks it preserves the selected voice.
-        File onlineTemp = new File(appContext.getCacheDir(), "aung-gyi-f5-online.wav");
+        // 1) Verified F5 Myanmar base/default voice. No ZIP and no reference WAV are needed.
+        File onlineTemp = new File(appContext.getCacheDir(), "f5-myanmar-default-online.wav");
         try {
-            onlineF5.synthesizeToFile(
-                    clean,
-                    F5MyanmarVoicePack.referenceAudio(appContext),
-                    F5MyanmarVoicePack.REFERENCE_TEXT,
-                    1.0f,
-                    onlineTemp);
-            Audio cloned = readWav(onlineTemp);
+            onlineF5.synthesizeDefaultToFile(clean, 1.0f, onlineTemp);
+            Audio generated = readWav(onlineTemp);
             //noinspection ResultOfMethodCallIgnored
             onlineTemp.delete();
-            if (cloned.samples.length > 0) return cloned;
-            f5Failure = new IllegalStateException("Online F5 returned no audio samples.");
+            if (generated.samples.length > 0) return generated;
+            f5Failure = new IllegalStateException("Online F5 default voice returned no audio samples.");
         } catch (Throwable problem) {
             f5Failure = problem;
             // Network queue/cold-start/service errors must never close the audiobook app.
@@ -96,8 +83,8 @@ final class F5LocalTtsEngine implements AutoCloseable {
         // Important: do NOT call MmsMyanmarTtsEngine here. A native runtime failure there cannot be
         // caught by Java and was the reason Play could throw the user back to Home. Let the service
         // use the normal Edge Myanmar fallback instead.
-        String reason = f5Failure == null ? "Aung Gyi online voice is unavailable." : safeMessage(f5Failure);
-        throw new IllegalStateException("Aung Gyi voice unavailable: " + reason, f5Failure);
+        String reason = f5Failure == null ? "F5 Myanmar default voice is unavailable." : safeMessage(f5Failure);
+        throw new IllegalStateException("F5 Myanmar default voice unavailable: " + reason, f5Failure);
     }
 
     /** Read common PCM/float WAV output into mono float samples. */

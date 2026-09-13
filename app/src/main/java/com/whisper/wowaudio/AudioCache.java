@@ -17,8 +17,8 @@ final class AudioCache {
     }
 
     static File f5(BookStore.Book book, int index, String text) {
-        File dir = new File(book.directory, "speech-cache/f5/" + F5MyanmarVoicePack.VOICE_ID_AUNG_GYI);
-        String signature = sha256(F5MyanmarVoicePack.RUNTIME_VERSION + "\n" + text);
+        File dir = new File(book.directory, "speech-cache/f5/default-online");
+        String signature = sha256("f5-myanmar-default-online-v1\n" + text);
         return new File(dir, String.format(Locale.US, "%05d-%s.wav", index, signature.substring(0, 16)));
     }
 
